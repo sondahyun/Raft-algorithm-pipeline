@@ -3,6 +3,8 @@ package raft
 import (
 	"encoding/gob"
 	"fmt"
+	"math/rand"
+
 	"time"
 
 	"go.uber.org/atomic"
@@ -24,12 +26,14 @@ type Replica struct {
 	RaftSafety
 	election.Election
 
-	pd              *mempool.Producer
-	pm              *pacemaker.Pacemaker
-	start           chan bool // signal to start the node
-	isStarted       atomic.Bool
-	isByz           bool
-	heartbeat       *time.Timer // timeout for each view
+	pd            *mempool.Producer
+	pm            *pacemaker.Pacemaker
+	start         chan bool // signal to start the node
+	isStarted     atomic.Bool
+	isByz         bool
+	heartbeat     *time.Timer // timeout for each view
+	electionTimer *time.Timer // timeout for each view
+
 	committedBlocks chan *blockchain.Block
 	forkedBlocks    chan *blockchain.Block
 	eventChan       chan interface{}
@@ -108,7 +112,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	// case "fastRaft":
 	// 	r.RaftSafety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	default:
-		r.RaftSafety = Raft.NewRaft()
+		r.RaftSafety = NewRaft()
 	}
 	return r
 }
@@ -232,6 +236,7 @@ func (r *Replica) proposeBlock(view types.View) {
 	r.voteStart = time.Now()
 }
 
+
 // ListenLocalEvent listens new view and timeout events
 // heartbeat Timer
 func (r *Replica) ListenLocalEvent() {
@@ -256,7 +261,8 @@ func (r *Replica) ListenLocalEvent() {
 				log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
 				break L
 			case <-r.heartbeat.C: //electionTimeout 됐을 경우
-				r.RaftSafety.ProcessLocalTmo(r.pm.GetCurView()) //leader election 시작
+
+				r.RaftSafety.ProcessElectionLocalTmo(r.pm.GetCurView()) //leader election 시작
 				break L
 			}
 		}
@@ -290,6 +296,7 @@ func (r *Replica) Start() {
 	go r.Run()
 	// wait for the start signal
 	<-r.start
+	go r.StartElection()
 	go r.ListenLocalEvent()      //heartbeat timer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 

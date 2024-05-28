@@ -24,6 +24,8 @@ type Node interface {
 	Forward(id identity.NodeID, r message.Transaction)
 	Register(m interface{}, f interface{})
 	IsByz() bool
+	SetState(state types.NodeState)
+	GetState() types.NodeState
 }
 
 // node implements Node interface
@@ -36,8 +38,8 @@ type node struct {
 	state types.NodeState
 
 	//Database
-	MessageChan chan interface{} // 서버 간 tcp 통신으로 받는 모든 메시지
-	TxChan      chan interface{} // 클라이언트가 http 통신으로 전송하는 트랜잭션 받는 채널
+	MessageChan chan interface{}         // 서버 간 tcp 통신으로 받는 모든 메시지
+	TxChan      chan interface{}         // 클라이언트가 http 통신으로 전송하는 트랜잭션 받는 채널
 	handles     map[string]reflect.Value // 메시지-함수
 	server      *http.Server
 	isByz       bool
@@ -64,6 +66,14 @@ func NewNode(id identity.NodeID, isByz bool) Node {
 
 func (n *node) ID() identity.NodeID {
 	return n.id
+}
+
+func (n *node) GetState() types.NodeState {
+	return n.state
+}
+
+func (n *node) SetState(state types.NodeState) {
+	n.state = state
 }
 
 func (n *node) IsByz() bool {

@@ -3,9 +3,10 @@ package replica
 import (
 	"encoding/gob"
 	"fmt"
+	"time"
+
 	fhs "github.com/gitferry/bamboo/fasthostuff"
 	"github.com/gitferry/bamboo/lbft"
-	"time"
 
 	"go.uber.org/atomic"
 

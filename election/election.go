@@ -8,4 +8,5 @@ import (
 type Election interface {
 	IsLeader(id identity.NodeID, view types.View) bool
 	FindLeaderFor(view types.View) identity.NodeID
+	StartElection()
 }

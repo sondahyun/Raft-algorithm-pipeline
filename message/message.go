@@ -8,7 +8,6 @@ import (
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/db"
 	"github.com/gitferry/bamboo/identity"
-	"github.com/gitferry/bamboo/raft"
 	"github.com/gitferry/bamboo/types"
 )
 
