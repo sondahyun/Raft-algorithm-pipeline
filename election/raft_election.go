@@ -24,7 +24,9 @@ func (rl *raftElection) StartElection() {
 	timer := time.NewTimer(electionTime)
 	select {
 	case <-timer.C: // Timer 만료
-		r.SetState(types.CANDIDATE)
+
+
+		//SetState(types.CANDIDATE)
 		// node.state = types.CANDIDATE
 
 		// 새 선거를 시작하는 로직

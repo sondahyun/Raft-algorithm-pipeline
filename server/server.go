@@ -13,7 +13,7 @@ import (
 	"github.com/gitferry/bamboo/replica"
 )
 
-var algorithm = flag.String("algorithm", "hotstuff", "BFT consensus algorithm")
+var algorithm = flag.String("algorithm", "raft", "BFT consensus algorithm")
 var id = flag.String("id", "", "NodeID of the node")
 var simulation = flag.Bool("sim", false, "simulation mode")
 

@@ -3,7 +3,6 @@ package raft
 import (
 	"encoding/gob"
 	"fmt"
-	"math/rand"
 
 	"time"
 
@@ -239,6 +238,7 @@ func (r *Replica) proposeBlock(view types.View) {
 
 // ListenLocalEvent listens new view and timeout events
 // heartbeat Timer
+// 
 func (r *Replica) ListenLocalEvent() {
 	r.lastViewTime = time.Now()
 	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
