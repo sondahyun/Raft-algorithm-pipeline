@@ -10,7 +10,7 @@ import (
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/log"
-	"github.com/gitferry/bamboo/replica"
+	"github.com/gitferry/bamboo/raft"
 )
 
 var algorithm = flag.String("algorithm", "raft", "BFT consensus algorithm")
@@ -23,7 +23,7 @@ func initReplica(id identity.NodeID, isByz bool) {
 		log.Infof("node %v is Byzantine", id)
 	}
 
-	r := replica.NewReplica(id, *algorithm, isByz)
+	r := raft.NewRaftReplica(id, *algorithm, isByz)
 	r.Start()
 }
 

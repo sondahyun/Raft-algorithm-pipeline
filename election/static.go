@@ -1,3 +1,4 @@
+// Static은 고정된 리더 사용 (master노드가 항상 리더)
 package election
 
 import (
@@ -7,6 +8,11 @@ import (
 
 type Static struct {
 	master identity.NodeID
+}
+
+// StartElection implements Election.
+func (st *Static) StartElection() {
+	panic("unimplemented")
 }
 
 func NewStatic(master identity.NodeID) *Static {

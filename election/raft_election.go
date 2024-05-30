@@ -20,11 +20,11 @@ func NewRaftElection() *raftElection {
 }
 
 func (rl *raftElection) StartElection() {
-	electionTime := time.Duration(rand.Intn(150)+150) * time.Millisecond
+	electionTime := time.Duration(rand.Intn(10)+10) * time.Millisecond
 	timer := time.NewTimer(electionTime)
 	select {
 	case <-timer.C: // Timer 만료
-
+		
 
 		//SetState(types.CANDIDATE)
 		// node.state = types.CANDIDATE

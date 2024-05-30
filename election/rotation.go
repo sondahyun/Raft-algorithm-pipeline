@@ -1,3 +1,6 @@
+// view에 따라서 리더가 순환, 변경
+// 초기 뷰(3이하)에서는 설정된 peer수보다 작은 노드 ID를 가진 노드가 리더가 됨
+// 그 이후에는 뷰번호와 peer수를 사용하여 해시 함수를 통해 리더를 결정 (view가 증가함에따라서 리더가 바뀜)
 package election
 
 import (
@@ -11,6 +14,11 @@ import (
 
 type Rotation struct {
 	peerNo int
+}
+
+// StartElection implements Election.
+func (r *Rotation) StartElection() {
+	panic("unimplemented")
 }
 
 func NewRotation(peerNo int) *Rotation {

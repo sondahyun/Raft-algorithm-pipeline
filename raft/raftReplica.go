@@ -17,7 +17,6 @@ import (
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
-	"github.com/gitferry/bamboo/types"
 )
 
 type Replica struct {
@@ -67,11 +66,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	if isByz {
 		log.Infof("[%v] is Byzantine", r.ID())
 	}
-	if config.GetConfig().Master == "0" {
-		r.Election = election.NewRotation(config.GetConfig().N())
-	} else {
-		r.Election = election.NewStatic(config.GetConfig().Master)
-	}
+	r.Election = election.NewRaftElection() //static
 	r.isByz = isByz
 	r.pd = mempool.NewProducer()
 	r.pm = pacemaker.NewPacemaker(config.GetConfig().N())
@@ -111,7 +106,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	// case "fastRaft":
 	// 	r.RaftSafety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	default:
-		r.RaftSafety = NewRaft()
+		r.RaftSafety = NewRaft(r.Node, r.pm)
 	}
 	return r
 }
@@ -213,32 +208,8 @@ func (r *Replica) processForkedBlock(block *blockchain.Block) {
 	log.Infof("[%v] the block is forked, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
 }
 
-func (r *Replica) processNewView(newView types.View) {
-	log.Debugf("[%v] is processing new view: %v, leader is %v", r.ID(), newView, r.FindLeaderFor(newView))
-	if !r.IsLeader(r.ID(), newView) {
-		return
-	}
-	r.proposeBlock(newView)
-}
-
-func (r *Replica) proposeBlock(view types.View) {
-	createStart := time.Now()
-	block := r.RaftSafety.MakeProposal(view, r.pd.GeneratePayload())
-	r.totalBlockSize += len(block.Payload)
-	r.proposedNo++
-	createEnd := time.Now()
-	createDuration := createEnd.Sub(createStart)
-	block.Timestamp = time.Now()
-	r.totalCreateDuration += createDuration
-	r.Broadcast(block)
-	_ = r.RaftSafety.ProcessBlock(block)
-	r.voteStart = time.Now()
-}
-
-
 // ListenLocalEvent listens new view and timeout events
 // heartbeat Timer
-// 
 func (r *Replica) ListenLocalEvent() {
 	r.lastViewTime = time.Now()
 	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
@@ -262,7 +233,7 @@ func (r *Replica) ListenLocalEvent() {
 				break L
 			case <-r.heartbeat.C: //electionTimeout 됐을 경우
 
-				r.RaftSafety.ProcessElectionLocalTmo(r.pm.GetCurView()) //leader election 시작
+				// r.RaftSafety.ProcessElectionLocalTmo(r.pm.GetCurView()) //leader election 시작
 				break L
 			}
 		}
@@ -296,7 +267,8 @@ func (r *Replica) Start() {
 	go r.Run()
 	// wait for the start signal
 	<-r.start
-	go r.StartElection()
+	election := election.NewRaftElection()
+	election.StartElection()     //처음 리더를 뽑음
 	go r.ListenLocalEvent()      //heartbeat timer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 
@@ -304,23 +276,10 @@ func (r *Replica) Start() {
 		event := <-r.eventChan
 		// r.timer.Reset()
 		switch v := event.(type) {
-		case types.View:
-			r.processNewView(v)
-		case blockchain.Block:
-			startProcessTime := time.Now()
-			r.totalProposeDuration += startProcessTime.Sub(v.Timestamp)
-			_ = r.RaftSafety.ProcessBlock(&v)
-			r.totalProcessDuration += time.Now().Sub(startProcessTime)
-			r.voteStart = time.Now()
-			r.processedNo++
-		case blockchain.Vote:
-			startProcessTime := time.Now()
-			r.RaftSafety.ProcessVote(&v)
-			processingDuration := time.Now().Sub(startProcessTime)
-			r.totalVoteTime += processingDuration
-			r.voteNo++
+		// case types.View:
+		// 	r.processNewView(v)
 		case pacemaker.TMO:
-			r.RaftSafety.ProcessRemoteTmo(&v)
+			// r.RaftSafety.ProcessRemoteTmo(&v)
 		case message.RequestAppendEntries: // message라는 패키지 안에 있는 RequestAppendEntries
 			r.RaftSafety.ProcessRequestAppendEntries(&v)
 

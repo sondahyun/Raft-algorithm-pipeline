@@ -109,15 +109,20 @@ type Register struct {
  *     Raft Related     *
  ************************/
 
+type LogEntry struct {
+	Command interface{} // 상태 머신에 적용될 명령
+	Term    types.View  // 수신된 term 번호
+}
+
 // 타입정의
 type RequestAppendEntries struct {
 	//Arguments:
-	Term         types.View      // leader의 term
-	LeaderID     string          // follower가 client 요청을 redirect할 수 있는 leader의 식별자
-	PrevLogIndex int             // 새로운 log entries가 추가 되기 전에, 바로 이전에 있는 log entry의 index
-	PrevLogTerm  int             // PrevLogIndex에 해당하는 log entry의 term번호
-	Entries      []raft.LogEntry // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
-	LeaderCommit int             // 리더의 commitIndex 값, follower의 commitIndex를 업데이트하는데 사용
+	Term         types.View // leader의 term
+	LeaderID     string     // follower가 client 요청을 redirect할 수 있는 leader의 식별자
+	PrevLogIndex int        // 새로운 log entries가 추가 되기 전에, 바로 이전에 있는 log entry의 index
+	PrevLogTerm  types.View // PrevLogIndex에 해당하는 log entry의 term번호
+	Entries      []LogEntry // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
+	LeaderCommit int        // 리더의 commitIndex 값, follower의 commitIndex를 업데이트하는데 사용
 }
 
 type ResponseAppendEntries struct {
@@ -131,7 +136,7 @@ type RequestVote struct {
 	Term         types.View // 요청을 보내는 candidate의 term
 	CandidateID  string     // 투표를 요청하는 candidate의 ID
 	LastLogIndex int        // candidate의 마지막 log entry의 index
-	LastLogTerm  int        // candidate의 마지막 log entry의 term
+	LastLogTerm  types.View // candidate의 마지막 log entry의 term
 }
 
 type ResponseVote struct {

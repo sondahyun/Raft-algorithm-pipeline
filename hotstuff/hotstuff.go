@@ -32,12 +32,7 @@ type HotStuff struct {
 	mu              sync.Mutex
 }
 
-func NewHotStuff(
-	node node.Node,
-	pm *pacemaker.Pacemaker,
-	elec election.Election,
-	committedBlocks chan *blockchain.Block,
-	forkedBlocks chan *blockchain.Block) *HotStuff {
+func NewHotStuff(node node.Node, pm *pacemaker.Pacemaker, elec election.Election, committedBlocks chan *blockchain.Block, forkedBlocks chan *blockchain.Block) *HotStuff {
 	hs := new(HotStuff)
 	hs.Node = node
 	hs.Election = elec
