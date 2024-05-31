@@ -1,9 +1,6 @@
 package election
 
 import (
-	"math/rand"
-	"time"
-
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/types"
 )
@@ -19,23 +16,23 @@ func NewRaftElection() *raftElection {
 	return rl
 }
 
-func (rl *raftElection) StartElection() {
-	electionTime := time.Duration(rand.Intn(10)+10) * time.Millisecond
-	timer := time.NewTimer(electionTime)
-	select {
-	case <-timer.C: // Timer 만료
+// func (rl *raftElection) StartElection() {
+// 	electionTime := time.Duration(rand.Intn(10)+10) * time.Millisecond
+// 	timer := time.NewTimer(electionTime)
+// 	select {
+// 	case <-timer.C: // Timer 만료
 		
 
-		//SetState(types.CANDIDATE)
-		// node.state = types.CANDIDATE
+// 		//SetState(types.CANDIDATE)
+// 		// node.state = types.CANDIDATE
 
-		// 새 선거를 시작하는 로직
-		// 예: r.requestVotes(node)
-		//AppendEntries RPC를 받으면, timer를 다시 설정
-		//appendEntriesReceived:
-		//timer.Reset(electionTimeout)
-	}
-}
+// 		// 새 선거를 시작하는 로직
+// 		// 예: r.requestVotes(node)
+// 		//AppendEntries RPC를 받으면, timer를 다시 설정
+// 		//appendEntriesReceived:
+// 		//timer.Reset(electionTimeout)
+// 	}
+// }
 
 func (rl *raftElection) IsLeader(id identity.NodeID, view types.View) bool {
 	return rl.leaderManager[view] == id

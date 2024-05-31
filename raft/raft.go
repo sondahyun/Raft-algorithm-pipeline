@@ -181,7 +181,7 @@ func (r *Raft) ProcessResponseAppendEntries(msg *message.ResponseAppendEntries) 
 }
 
 func (r *Raft) ProcessResponseVote(msg *message.ResponseVote) {
-
+	
 }
 
 //All Servers:

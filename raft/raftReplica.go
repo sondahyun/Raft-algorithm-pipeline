@@ -3,6 +3,7 @@ package raft
 import (
 	"encoding/gob"
 	"fmt"
+	"math/rand"
 
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
+	"github.com/gitferry/bamboo/types"
 )
 
 type Replica struct {
@@ -210,7 +212,9 @@ func (r *Replica) processForkedBlock(block *blockchain.Block) {
 
 // ListenLocalEvent listens new view and timeout events
 // heartbeat Timer
-func (r *Replica) ListenLocalEvent() {
+func (r *Replica) ListenLocalEvent() { //heartbeat timer돌다가 electiontimeout되면 heartbeat멈춤
+	//리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
+	//
 	r.lastViewTime = time.Now()
 	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
 	for {
@@ -235,8 +239,26 @@ func (r *Replica) ListenLocalEvent() {
 
 				// r.RaftSafety.ProcessElectionLocalTmo(r.pm.GetCurView()) //leader election 시작
 				break L
+
 			}
 		}
+	}
+}
+
+//맨처음 election 시작
+func (r *Replica) StartElection() {
+	electionTime := time.Duration(rand.Intn(10)+10) * time.Millisecond
+	timer := time.NewTimer(electionTime)
+	select {
+		//case <- 
+	case <-timer.C: // Timer 만료
+		r.Node.SetState(types.CANDIDATE)
+
+		// 새 선거를 시작하는 로직
+		// 예: r.requestVotes(node)
+		//AppendEntries RPC를 받으면, timer를 다시 설정
+		//appendEntriesReceived:
+		//timer.Reset(electionTimeout)
 	}
 }
 
@@ -267,8 +289,9 @@ func (r *Replica) Start() {
 	go r.Run()
 	// wait for the start signal
 	<-r.start
-	election := election.NewRaftElection()
-	election.StartElection()     //처음 리더를 뽑음
+	//election := election.NewRaftElection()
+	//election.StartElection()     //처음 리더를 뽑음
+	r.StartElection()
 	go r.ListenLocalEvent()      //heartbeat timer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 
