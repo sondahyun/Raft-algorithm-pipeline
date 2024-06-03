@@ -34,6 +34,19 @@ type Replica struct {
 	heartbeat     *time.Timer // timeout for each view
 	electionTimer *time.Timer // timeout for each view
 
+	// Persistent state on all servers
+	CurrentTerm types.View         // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
+	VotedFor    string             // 현재 term에서 투표한 candidate의 ID (없으면 null)
+	Log         []message.LogEntry // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
+
+	// Volatile state on all servers
+	CommitIndex int // 커밋된 것으로 알려진 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
+	LastApplied int // 상태 머신에 적용된 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
+
+	// Volatile state on leaders
+	NextIndex  map[string]int // 각 서버에 보낼 다음 로그 엔트리의 인덱스 (초기값 리더의 마지막 로그 인덱스 + 1)
+	MatchIndex map[string]int // 각 서버에 복제된 것으로 알려진 최고 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
+
 	committedBlocks chan *blockchain.Block
 	forkedBlocks    chan *blockchain.Block
 	eventChan       chan interface{}
@@ -76,9 +89,18 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.eventChan = make(chan interface{})
 	r.committedBlocks = make(chan *blockchain.Block, 100)
 	r.forkedBlocks = make(chan *blockchain.Block, 100)
-	// r.Register(blockchain.Block{}, r.HandleBlock)
-	// r.Register(blockchain.Vote{}, r.HandleVote)
-	// r.Register(pacemaker.TMO{}, r.HandleTmo)
+	r.Register(blockchain.Block{}, r.HandleBlock)
+	r.Register(blockchain.Vote{}, r.HandleVote)
+	r.Register(pacemaker.TMO{}, r.HandleTmo)
+
+	r.CurrentTerm = types.View(0),
+	r.VotedFor:    "",                     // 빈 문자열로 초기화
+	r.Log:         []message.LogEntry{{}}, // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
+	r.CommitIndex: 0,                      //커밋되어 있는 가장 높은 log entry의 index
+	r.LastApplied: 0,                      //state machine에 적용된 가장 높은 log entry의 index
+	r.NextIndex:   make(map[string]int),   // make 함수로 초기화
+	r.MatchIndex:  make(map[string]int),   // make 함수로 초기화
+
 	r.Register(message.Transaction{}, r.handleTxn)
 	r.Register(message.Query{}, r.handleQuery)
 	r.Register(message.RequestAppendEntries{}, r.handleRequestAppendEntries)
@@ -114,19 +136,19 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 }
 
 /* Message Handlers */ //메세지 핸들러
-func (r *Replica) handleRequestAppendEntries(msg *message.RequestAppendEntries) {
+func (r *Replica) handleRequestAppendEntries(msg message.RequestAppendEntries) {
 	r.eventChan <- msg
 }
 
-func (r *Replica) handleResponseAppendEntries(msg *message.ResponseAppendEntries) {
+func (r *Replica) handleResponseAppendEntries(msg message.ResponseAppendEntries) {
 	r.eventChan <- msg
 }
 
-func (r *Replica) handleRequestVote(msg *message.RequestVote) {
+func (r *Replica) handleRequestVote(msg message.RequestVote) {
 	r.eventChan <- msg
 }
 
-func (r *Replica) handleResponseVote(msg *message.ResponseVote) {
+func (r *Replica) handleResponseVote(msg message.ResponseVote) {
 	r.eventChan <- msg
 }
 
@@ -245,12 +267,11 @@ func (r *Replica) ListenLocalEvent() { //heartbeat timer돌다가 electiontimeou
 	}
 }
 
-//맨처음 election 시작
+// 맨처음 election 시작
 func (r *Replica) StartElection() {
 	electionTime := time.Duration(rand.Intn(10)+10) * time.Millisecond
 	timer := time.NewTimer(electionTime)
 	select {
-		//case <- 
 	case <-timer.C: // Timer 만료
 		r.Node.SetState(types.CANDIDATE)
 
@@ -284,14 +305,37 @@ func (r *Replica) startSignal() {
 	}
 }
 
+func (r *Replica) startElectionTimer() {
+	log.Debugf("[%v]start startElectionTimer", r.ID())
+
+	//seed (현재시간 기준)
+	rand.Seed(time.Now().UnixNano())
+
+	// 0~99까지의 난수 생성
+	randomNumber := rand.Intn(100) + 100
+	r.electionTimer = time.NewTimer(time.Duration(randomNumber) * time.Millisecond)
+
+	<-r.electionTimer.C //r.electionTimer.C channel로부터 메시지를 받을 때(타이머 만료)까지 대기(block)
+	r.SetState(types.CANDIDATE)
+	msg := message.RequestVote{
+		Term:         0,
+		CandidateID:  r.ID(),
+		LastLogIndex: 0,
+		LastLogTerm:  0,
+	}
+	// 나한테 투표
+	r.Broadcast(msg)
+	log.Debugf("[%v]finish startElectionTimer", r.ID())
+}
+
 // Start starts event loop
 func (r *Replica) Start() {
 	go r.Run()
 	// wait for the start signal
 	<-r.start
-	//election := election.NewRaftElection()
-	//election.StartElection()     //처음 리더를 뽑음
-	r.StartElection()
+	log.Debug("시작은 했음")
+
+	go r.startElectionTimer()    // startElectionTimer
 	go r.ListenLocalEvent()      //heartbeat timer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 
@@ -310,9 +354,23 @@ func (r *Replica) Start() {
 			r.RaftSafety.ProcessResponseAppendEntries(&v)
 
 		case message.RequestVote: // message라는 패키지 안에 있는 RequestAppendEntries
-			r.RaftSafety.ProcessRequestVote(&v)
+			if r.GetState() != types.FOLLOWER {
+				continue
+			}
+			r.electionTimer.Stop() // follower가 candidate가 되는 것을 막는 로직
+			// Todo: 받은 메시지(RequestVote)를 보고 확인을 한 뒤 리더에게 투표 전송
+			msg := message.ResponseVote{
+				Term: 0,
+				// VoteGranted: ,
+			}
+			r.Send(v.CandidateID, msg)
 
 		case message.ResponseVote: // message라는 패키지 안에 있는 ResponseAppendEntries
+			// 받은 투표를 확인해서 정족수에 충족하면 리더가 됨
+			// 그렇지 않으면 continue
+
+			// 리더가 되면 다른 노드들에게 하트비트 시작
+			// 클라이언트로 부터 받은 값으로 합의 시작
 			r.RaftSafety.ProcessResponseVote(&v)
 		}
 	}

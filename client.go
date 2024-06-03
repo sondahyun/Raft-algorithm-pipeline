@@ -111,7 +111,7 @@ func (c *HTTPClient) rest(url string, value db.Value) error {
 
 	rep, err := c.Client.Do(req)
 	if err != nil {
-		log.Error(err)
+		// log.Error(err)
 		return err
 	}
 	defer rep.Body.Close()

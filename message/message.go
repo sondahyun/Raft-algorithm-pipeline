@@ -133,10 +133,10 @@ type ResponseAppendEntries struct {
 
 type RequestVote struct {
 	//Arguments:
-	Term         types.View // 요청을 보내는 candidate의 term
-	CandidateID  string     // 투표를 요청하는 candidate의 ID
-	LastLogIndex int        // candidate의 마지막 log entry의 index
-	LastLogTerm  types.View // candidate의 마지막 log entry의 term
+	Term         types.View      // 요청을 보내는 candidate의 term
+	CandidateID  identity.NodeID // 투표를 요청하는 candidate의 ID
+	LastLogIndex int             // candidate의 마지막 log entry의 index
+	LastLogTerm  types.View      // candidate의 마지막 log entry의 term
 }
 
 type ResponseVote struct {
