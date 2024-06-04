@@ -141,6 +141,6 @@ type RequestVote struct {
 
 type ResponseVote struct {
 	//Results:
-	Term        types.View //candidate가 자신을 update하기 위해 사용하는 현재 term
+	Term        types.View // candidate가 자신을 update하기 위해 사용하는 현재 term
 	VoteGranted bool       // true means candidate received vote (true: 후보자가 투표받았음)
 }

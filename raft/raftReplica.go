@@ -25,6 +25,7 @@ type Replica struct {
 	node.Node
 	RaftSafety
 	election.Election
+	config.Config
 
 	pd            *mempool.Producer
 	pm            *pacemaker.Pacemaker
@@ -36,16 +37,18 @@ type Replica struct {
 
 	// Persistent state on all servers
 	CurrentTerm types.View         // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
-	VotedFor    string             // 현재 term에서 투표한 candidate의 ID (없으면 null)
+	VotedFor    identity.NodeID    // 현재 term에서 투표한 candidate의 ID (없으면 null)
 	Log         []message.LogEntry // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
+	VoteNum     map[types.View]int
+	TotalNum    int
 
 	// Volatile state on all servers
 	CommitIndex int // 커밋된 것으로 알려진 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
 	LastApplied int // 상태 머신에 적용된 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
 
 	// Volatile state on leaders
-	NextIndex  map[string]int // 각 서버에 보낼 다음 로그 엔트리의 인덱스 (초기값 리더의 마지막 로그 인덱스 + 1)
-	MatchIndex map[string]int // 각 서버에 복제된 것으로 알려진 최고 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
+	NextIndex  map[message.LogEntry]int // 각 서버에 보낼 다음 로그 엔트리의 인덱스 (초기값 리더의 마지막 로그 인덱스 + 1)
+	MatchIndex map[message.LogEntry]int // 각 서버에 복제된 것으로 알려진 최고 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
 
 	committedBlocks chan *blockchain.Block
 	forkedBlocks    chan *blockchain.Block
@@ -93,13 +96,16 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(blockchain.Vote{}, r.HandleVote)
 	r.Register(pacemaker.TMO{}, r.HandleTmo)
 
-	r.CurrentTerm = types.View(0),
-	r.VotedFor:    "",                     // 빈 문자열로 초기화
-	r.Log:         []message.LogEntry{{}}, // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
-	r.CommitIndex: 0,                      //커밋되어 있는 가장 높은 log entry의 index
-	r.LastApplied: 0,                      //state machine에 적용된 가장 높은 log entry의 index
-	r.NextIndex:   make(map[string]int),   // make 함수로 초기화
-	r.MatchIndex:  make(map[string]int),   // make 함수로 초기화
+	//초기화
+	r.CurrentTerm = types.View(0)
+	r.VotedFor = "" // 빈 문자열로 초기화
+	r.VoteNum = make(map[types.View]int)
+	r.TotalNum = config.GetConfig().N()
+	r.Log = []message.LogEntry{{}}                // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
+	r.CommitIndex = 0                             //커밋되어 있는 가장 높은 log entry의 index
+	r.LastApplied = 0                             //state machine에 적용된 가장 높은 log entry의 index
+	r.NextIndex = make(map[message.LogEntry]int)  // make 함수로 초기화
+	r.MatchIndex = make(map[message.LogEntry]int) // make 함수로 초기화
 
 	r.Register(message.Transaction{}, r.handleTxn)
 	r.Register(message.Query{}, r.handleQuery)
@@ -130,7 +136,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	// case "fastRaft":
 	// 	r.RaftSafety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	default:
-		r.RaftSafety = NewRaft(r.Node, r.pm)
+		r.RaftSafety = NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	}
 	return r
 }
@@ -152,29 +158,29 @@ func (r *Replica) handleResponseVote(msg message.ResponseVote) {
 	r.eventChan <- msg
 }
 
-// func (r *Replica) HandleBlock(block blockchain.Block) {
-// 	r.receivedNo++
-// 	r.startSignal()
-// 	log.Debugf("[%v] received a block from %v, view is %v, id: %x, prevID: %x", r.ID(), block.Proposer, block.View, block.ID, block.PrevID)
-// 	r.eventChan <- block
-// }
+func (r *Replica) HandleBlock(block blockchain.Block) {
+	r.receivedNo++
+	r.startSignal()
+	log.Debugf("[%v] received a block from %v, view is %v, id: %x, prevID: %x", r.ID(), block.Proposer, block.View, block.ID, block.PrevID)
+	r.eventChan <- block
+}
 
-// func (r *Replica) HandleVote(vote blockchain.Vote) {
-// 	if vote.View < r.pm.GetCurView() {
-// 		return
-// 	}
-// 	r.startSignal()
-// 	log.Debugf("[%v] received a vote frm %v, blockID is %x", r.ID(), vote.Voter, vote.BlockID)
-// 	r.eventChan <- vote
-// }
+func (r *Replica) HandleVote(vote blockchain.Vote) {
+	if vote.View < r.pm.GetCurView() {
+		return
+	}
+	r.startSignal()
+	log.Debugf("[%v] received a vote frm %v, blockID is %x", r.ID(), vote.Voter, vote.BlockID)
+	r.eventChan <- vote
+}
 
-// func (r *Replica) HandleTmo(tmo pacemaker.TMO) {
-// 	if tmo.View < r.pm.GetCurView() {
-// 		return
-// 	}
-// 	log.Debugf("[%v] received a timeout from %v for view %v", r.ID(), tmo.NodeID, tmo.View)
-// 	r.eventChan <- tmo
-// }
+func (r *Replica) HandleTmo(tmo pacemaker.TMO) {
+	if tmo.View < r.pm.GetCurView() {
+		return
+	}
+	log.Debugf("[%v] received a timeout from %v for view %v", r.ID(), tmo.NodeID, tmo.View)
+	r.eventChan <- tmo
+}
 
 // handleQuery replies a query with the statistics of the node
 func (r *Replica) handleQuery(m message.Query) {
@@ -232,55 +238,26 @@ func (r *Replica) processForkedBlock(block *blockchain.Block) {
 	log.Infof("[%v] the block is forked, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
 }
 
-// ListenLocalEvent listens new view and timeout events
-// heartbeat Timer
-func (r *Replica) ListenLocalEvent() { //heartbeat timer돌다가 electiontimeout되면 heartbeat멈춤
-	//리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
-	//
-	r.lastViewTime = time.Now()
-	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
-	for {
-		r.heartbeat.Reset(r.pm.GetTimerForView())
-	L:
-		for {
-			select {
-			case view := <-r.pm.EnteringViewEvent():
-				if view >= 2 {
-					r.totalVoteTime += time.Now().Sub(r.voteStart)
-				}
-				// measure round time
-				now := time.Now()
-				lasts := now.Sub(r.lastViewTime)
-				r.totalRoundTime += lasts
-				r.roundNo++
-				r.lastViewTime = now
-				r.eventChan <- view
-				log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
-				break L
-			case <-r.heartbeat.C: //electionTimeout 됐을 경우
-
-				// r.RaftSafety.ProcessElectionLocalTmo(r.pm.GetCurView()) //leader election 시작
-				break L
-
-			}
-		}
+func (r *Replica) processNewView(newView types.View) {
+	log.Debugf("[%v] is processing new view: %v, leader is %v", r.ID(), newView, r.FindLeaderFor(newView))
+	if !r.IsLeader(r.ID(), newView) {
+		return
 	}
+	r.proposeBlock(newView)
 }
 
-// 맨처음 election 시작
-func (r *Replica) StartElection() {
-	electionTime := time.Duration(rand.Intn(10)+10) * time.Millisecond
-	timer := time.NewTimer(electionTime)
-	select {
-	case <-timer.C: // Timer 만료
-		r.Node.SetState(types.CANDIDATE)
-
-		// 새 선거를 시작하는 로직
-		// 예: r.requestVotes(node)
-		//AppendEntries RPC를 받으면, timer를 다시 설정
-		//appendEntriesReceived:
-		//timer.Reset(electionTimeout)
-	}
+func (r *Replica) proposeBlock(view types.View) {
+	createStart := time.Now()
+	block := r.RaftSafety.MakeProposal(view, r.pd.GeneratePayload())
+	r.totalBlockSize += len(block.Payload)
+	r.proposedNo++
+	createEnd := time.Now()
+	createDuration := createEnd.Sub(createStart)
+	block.Timestamp = time.Now()
+	r.totalCreateDuration += createDuration
+	r.Node.Broadcast(block)
+	_ = r.RaftSafety.ProcessBlock(block)
+	r.voteStart = time.Now()
 }
 
 // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
@@ -318,14 +295,49 @@ func (r *Replica) startElectionTimer() {
 	<-r.electionTimer.C //r.electionTimer.C channel로부터 메시지를 받을 때(타이머 만료)까지 대기(block)
 	r.SetState(types.CANDIDATE)
 	msg := message.RequestVote{
-		Term:         0,
-		CandidateID:  r.ID(),
-		LastLogIndex: 0,
-		LastLogTerm:  0,
+		Term:         r.CurrentTerm,
+		CandidateID:  r.Node.ID(),
+		LastLogIndex: r.CommitIndex,
+		LastLogTerm:  r.CurrentTerm, //candidate의 마지막 log entry의 term
 	}
 	// 나한테 투표
 	r.Broadcast(msg)
 	log.Debugf("[%v]finish startElectionTimer", r.ID())
+}
+
+// startHeartbeatTimer listens new view and timeout events
+// heartbeat Timer
+func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontimeout되면 heartbeat멈춤
+	//리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
+	//
+	r.lastViewTime = time.Now()
+	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
+	for {
+		r.heartbeat.Reset(r.pm.GetTimerForView())
+	L:
+		for {
+			select {
+			case view := <-r.pm.EnteringViewEvent():
+				if view >= 2 {
+					r.totalVoteTime += time.Now().Sub(r.voteStart)
+				}
+				// measure round time
+				now := time.Now()
+				lasts := now.Sub(r.lastViewTime)
+				r.totalRoundTime += lasts
+				r.roundNo++
+				r.lastViewTime = now
+				r.eventChan <- view
+				log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
+				break L
+			case <-r.heartbeat.C: //electionTimeout 됐을 경우
+
+				// r.RaftSafety.ProcessElectionLocalTmo(r.pm.GetCurView()) //leader election 시작
+				break L
+
+			}
+		}
+	}
 }
 
 // Start starts event loop
@@ -336,7 +348,7 @@ func (r *Replica) Start() {
 	log.Debug("시작은 했음")
 
 	go r.startElectionTimer()    // startElectionTimer
-	go r.ListenLocalEvent()      //heartbeat timer
+	go r.startHeartbeatTimer()   //heartbeat timer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 
 	for r.isStarted.Load() {
@@ -347,31 +359,44 @@ func (r *Replica) Start() {
 		// 	r.processNewView(v)
 		case pacemaker.TMO:
 			// r.RaftSafety.ProcessRemoteTmo(&v)
-		case message.RequestAppendEntries: // message라는 패키지 안에 있는 RequestAppendEntries
-			r.RaftSafety.ProcessRequestAppendEntries(&v)
+		case message.RequestAppendEntries:
+			//r.RaftSafety.ProcessRequestAppendEntries(&v)
 
-		case message.ResponseAppendEntries: // message라는 패키지 안에 있는 ResponseAppendEntries
-			r.RaftSafety.ProcessResponseAppendEntries(&v)
+		case message.ResponseAppendEntries:
+			//r.RaftSafety.ProcessResponseAppendEntries(&v)
 
-		case message.RequestVote: // message라는 패키지 안에 있는 RequestAppendEntries
+		case message.RequestVote:
+			log.Debugf("[%v]가 ReqeustVote받음", r.ID())
+			// leader, candidate pass
 			if r.GetState() != types.FOLLOWER {
 				continue
 			}
+			if v.Term < r.CurrentTerm {
+				continue
+			}
+
+			// follower
 			r.electionTimer.Stop() // follower가 candidate가 되는 것을 막는 로직
-			// Todo: 받은 메시지(RequestVote)를 보고 확인을 한 뒤 리더에게 투표 전송
+			// Request확인, vote to candidate
 			msg := message.ResponseVote{
-				Term: 0,
-				// VoteGranted: ,
+				Term:        r.CurrentTerm,
+				VoteGranted: true,
 			}
 			r.Send(v.CandidateID, msg)
 
-		case message.ResponseVote: // message라는 패키지 안에 있는 ResponseAppendEntries
+		case message.ResponseVote:
 			// 받은 투표를 확인해서 정족수에 충족하면 리더가 됨
-			// 그렇지 않으면 continue
+			if v.VoteGranted {
+				r.voteNo++
+			}
+			if r.VoteNum[v.Term] <= r.TotalNum/2 { //quorum 만족X
+				continue
+			}
+			r.SetState(types.LEADER)
 
 			// 리더가 되면 다른 노드들에게 하트비트 시작
 			// 클라이언트로 부터 받은 값으로 합의 시작
-			r.RaftSafety.ProcessResponseVote(&v)
+			//r.RaftSafety.ProcessResponseVote(&v)
 		}
 	}
 }

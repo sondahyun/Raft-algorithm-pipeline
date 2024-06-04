@@ -1,6 +1,13 @@
 package raft
 
 import (
+	"fmt"
+	"sync"
+
+	"github.com/gitferry/bamboo/blockchain"
+	"github.com/gitferry/bamboo/config"
+	"github.com/gitferry/bamboo/crypto"
+	"github.com/gitferry/bamboo/election"
 	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/node"
@@ -10,110 +17,307 @@ import (
 
 const FORK = "fork"
 
-type Raft struct { // 데이터 타입 정의
+type Raft struct {
 	node.Node
-	pm *pacemaker.Pacemaker
+	election.Election
+	pm              *pacemaker.Pacemaker
+	lastVotedView   types.View
+	preferredView   types.View
+	highQC          *blockchain.QC
+	bc              *blockchain.BlockChain
+	committedBlocks chan *blockchain.Block
+	forkedBlocks    chan *blockchain.Block
+	bufferedQCs     map[crypto.Identifier]*blockchain.QC
+	bufferedBlocks  map[types.View]*blockchain.Block
+	mu              sync.Mutex
 }
 
-// Raft 인스턴스 초기화
-func NewRaft(node node.Node, pm *pacemaker.Pacemaker) *Raft {
-	r := &Raft{
-		Node:        node,
-		CurrentTerm: types.View(0),
-		VotedFor:    "",                     // 빈 문자열로 초기화
-		Log:         []message.LogEntry{{}}, // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
-		CommitIndex: 0,                      //커밋되어 있는 가장 높은 log entry의 index
-		LastApplied: 0,                      //state machine에 적용된 가장 높은 log entry의 index
-		NextIndex:   make(map[string]int),   // make 함수로 초기화
-		MatchIndex:  make(map[string]int),   // make 함수로 초기화
-	}
+// ProcessElectionLocalTmo implements RaftSafety.
+func (r *Raft) ProcessElectionLocalTmo(view types.View) {
+	panic("unimplemented")
+}
 
+func NewRaft(node node.Node, pm *pacemaker.Pacemaker, elec election.Election, committedBlocks chan *blockchain.Block, forkedBlocks chan *blockchain.Block) *Raft {
+	r := new(Raft)
+	r.Node = node
+	r.Election = elec
+	r.pm = pm
+	r.bc = blockchain.NewBlockchain(config.GetConfig().N())
+	r.bufferedBlocks = make(map[types.View]*blockchain.Block)
+	r.bufferedQCs = make(map[crypto.Identifier]*blockchain.QC)
+	r.highQC = &blockchain.QC{View: 0}
+	r.committedBlocks = committedBlocks
+	r.forkedBlocks = forkedBlocks
 	return r
 }
 
-func (r *Raft) ProcessElectionLocalTmo(view types.View) {
+func (r *Raft) ProcessBlock(block *blockchain.Block) error {
+	log.Debugf("[%v] is processing block from %v, view: %v, id: %x", r.ID(), block.Proposer.Node(), block.View, block.ID)
+	curView := r.pm.GetCurView()
+	if block.Proposer != r.ID() {
+		blockIsVerified, _ := crypto.PubVerify(block.Sig, crypto.IDToByte(block.ID), block.Proposer)
+		if !blockIsVerified {
+			log.Warningf("[%v] received a block with an invalid signature", r.ID())
+		}
+	}
+	if block.View > curView+1 {
+		//	buffer the block
+		r.bufferedBlocks[block.View-1] = block
+		log.Debugf("[%v] the block is buffered, id: %x", r.ID(), block.ID)
+		return nil
+	}
+	if block.QC != nil {
+		r.updateHighQC(block.QC)
+	} else {
+		return fmt.Errorf("the block should contain a QC")
+	}
+	// does not have to process the QC if the replica is the proposer
+	if block.Proposer != r.ID() {
+		r.processCertificate(block.QC)
+	}
+	curView = r.pm.GetCurView()
+	if block.View < curView {
+		log.Warningf("[%v] received a stale proposal from %v", r.ID(), block.Proposer)
+		return nil
+	}
+	if !r.Election.IsLeader(block.Proposer, block.View) {
+		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
+	}
+	r.bc.AddBlock(block)
+	// process buffered QC
+	qc, ok := r.bufferedQCs[block.ID]
+	if ok {
+		r.processCertificate(qc)
+		delete(r.bufferedQCs, block.ID)
+	}
 
+	shouldVote, err := r.votingRule(block)
+	if err != nil {
+		log.Errorf("[%v] cannot decide whether to vote the block, %w", r.ID(), err)
+		return err
+	}
+	if !shouldVote {
+		log.Debugf("[%v] is not going to vote for block, id: %x", r.ID(), block.ID)
+		return nil
+	}
+	vote := blockchain.MakeVote(block.View, r.ID(), block.ID)
+	// vote is sent to the next leader
+	voteAggregator := r.FindLeaderFor(block.View + 1)
+	if voteAggregator == r.ID() {
+		log.Debugf("[%v] vote is sent to itself, id: %x", r.ID(), vote.BlockID)
+		r.ProcessVote(vote)
+	} else {
+		log.Debugf("[%v] vote is sent to %v, id: %x", r.ID(), voteAggregator, vote.BlockID)
+		r.Send(voteAggregator, vote)
+	}
+	b, ok := r.bufferedBlocks[block.View]
+	if ok {
+		_ = r.ProcessBlock(b)
+		delete(r.bufferedBlocks, block.View)
+	}
+	return nil
 }
 
-// func (r *Raft) ProcessRequestAppendEntries(msg *message.RequestAppendEntries) bool {
-// 	log.Infof("[%v]start ProcessRequestAppendEntries", r.ID())
+func (r *Raft) ProcessVote(vote *blockchain.Vote) {
+	log.Debugf("[%v] is processing the vote, block id: %x", r.ID(), vote.BlockID)
+	if vote.Voter != r.ID() {
+		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
+		if err != nil {
+			log.Warningf("[%v] Error in verifying the signature in vote id: %x", r.ID(), vote.BlockID)
+			return
+		}
+		if !voteIsVerified {
+			log.Warningf("[%v] received a vote with invalid signature. vote id: %x", r.ID(), vote.BlockID)
+			return
+		}
+	}
+	isBuilt, qc := r.bc.AddVote(vote)
+	if !isBuilt {
+		log.Debugf("[%v] not sufficient votes to build a QC, block id: %x", r.ID(), vote.BlockID)
+		return
+	}
+	qc.Leader = r.ID()
+	// buffer the QC if the block has not been received
+	_, err := r.bc.GetBlockByID(qc.BlockID)
+	if err != nil {
+		r.bufferedQCs[qc.BlockID] = qc
+		return
+	}
+	r.processCertificate(qc)
+}
 
-// 	if msg.Term < r.CurrentTerm {
-// 		// 1. Reply false if term < currentTerm (§5.1)
-// 		// follower의 현재 term이 수신된 메시지의 term보다 큰 경우, 요청 거부, false반환
-// 		log.Errorf("s")
-// 		return false
-// 	}
+func (r *Raft) ProcessRemoteTmo(tmo *pacemaker.TMO) {
+	log.Debugf("[%v] is processing tmo from %v", r.ID(), tmo.NodeID)
+	r.processCertificate(tmo.HighQC)
+	isBuilt, tc := r.pm.ProcessRemoteTmo(tmo)
+	if !isBuilt {
+		return
+	}
+	log.Debugf("[%v] a tc is built for view %v", r.ID(), tc.View)
+	r.processTC(tc)
+}
 
-// 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex
-// 	// whose term matches prevLogTerm (§5.3)
-// 	// log 일치성 검사: follower의 log에 prevLogIndex와 prevLogTerm의 entries가 없는 경우, 요청 거부, false반환
-// 	if len(r.Log) <= msg.PrevLogIndex || r.Log[msg.PrevLogIndex].Term != msg.PrevLogTerm {
-// 		return false
-// 	}
-// 	// 3. If an existing entry conflicts with a new one (same index
-// 	// but different terms), delete the existing entry and all that
-// 	// follow it (§5.3)
-// 	// 충돌하는 entries처리: 같은 index에 서로 다른 term을 가진 entry가 존재하면, 해당 entry와 그 뒤의 모든 entry를 삭제함
-// 	nextIndex := msg.PrevLogIndex + 1
-// 	if len(r.Log) > nextIndex && r.Log[nextIndex].Term != msg.Term {
-// 		r.Log = r.Log[:nextIndex] // 충돌하는 엔트리와 그 뒤 모두 제거
-// 	}
-// 	// 4. Append any new entries not already in the log
-// 	// 새로운 entry추가: 아직 log에 없는 새로운 엔트리들을 추가
+func (r *Raft) ProcessLocalTmo(view types.View) {
+	r.pm.AdvanceView(view)
+	tmo := &pacemaker.TMO{
+		View:   view + 1,
+		NodeID: r.ID(),
+		HighQC: r.GetHighQC(),
+	}
+	r.Broadcast(tmo)
+	r.ProcessRemoteTmo(tmo)
+}
 
-// 	r.Log = append(r.Log, msg.Entries...)
-// 	// 5. If leaderCommit > commitIndex, set commitIndex =
-// 	// min(leaderCommit, index of last new entry)
-// 	// commitIndex업데이트: leader의 commitIndex가 follower의 commitIndex보다 큰 경우, follower의 commitIndex를 leader의 commitIndex와 새로 추가된 마지막 엔트리의 index중 작은 값으로 설정
-// 	if msg.LeaderCommit > r.CommitIndex {
-// 		lastNewIndex := nextIndex + len(msg.Entries) - 1
-// 		if msg.LeaderCommit < lastNewIndex {
-// 			r.CommitIndex = msg.LeaderCommit
-// 		} else {
-// 			r.CommitIndex = lastNewIndex
-// 		}
-// 	}
+func (r *Raft) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
+	qc := r.forkChoice()
+	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, r.ID())
+	return block
+}
 
-// 	log.Info("finish ProcessRequestAppendEntries")
+func (r *Raft) forkChoice() *blockchain.QC {
+	var choice *blockchain.QC
+	if !r.IsByz() || config.GetConfig().Strategy != FORK {
+		return r.GetHighQC()
+	}
+	//	create a fork by returning highQC's parent's QC
+	parBlockID := r.GetHighQC().BlockID
+	parBlock, err := r.bc.GetBlockByID(parBlockID)
+	if err != nil {
+		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
+	}
+	if parBlock.QC.View < r.preferredView {
+		choice = r.GetHighQC()
+	} else {
+		choice = parBlock.QC
+	}
+	// to simulate TC's view
+	choice.View = r.pm.GetCurView() - 1
+	return choice
+}
 
-// 	return true
-// }
+func (r *Raft) processTC(tc *pacemaker.TC) {
+	if tc.View < r.pm.GetCurView() {
+		return
+	}
+	r.pm.AdvanceView(tc.View)
+}
 
-// func (r *Raft) ProcessRequestVote(msg *message.RequestVote) bool { // follower 입장
-// 	// 1. Reply false if term < currentTerm (§5.1)
-// 	// term 확인: 수신자의 현재 term이 요청받은 term보다 큰 경우, false, 투표X
-// 	// if msg.Term < r.CurrentTerm {
-// 	// 	return false
-// 	// }
+func (r *Raft) GetHighQC() *blockchain.QC {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.highQC
+}
 
-// 	// // 2. If votedFor is null (in Go, empty string) or candidateId, and candidate’s log is at
-// 	// // least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
-// 	// // 수신자가 아무에게도 투표하지 않았거나, 이미 해당 candidate에게 투표한 상태,
-// 	// // candidate의 log가 수신자의 log보다 최신
-// 	// // (candidate의 마지막 log entry의 term이 수신자의 마지막 log entry의 term보다 크거나,
-// 	// // term이 같을 경우, candidate의 log entry의 index가 더 크거나 같음)이거나 같으면 투표 O
-// 	// lastLogIndex := len(r.Log) - 1
-// 	// lastLogTerm := r.Log[lastLogIndex].Term
-// 	// isLogUpToDate := msg.LastLogTerm > lastLogTerm || (msg.LastLogTerm == lastLogTerm && msg.LastLogIndex >= lastLogIndex)
+func (r *Raft) GetChainStatus() string {
+	chainGrowthRate := r.bc.GetChainGrowth()
+	blockIntervals := r.bc.GetBlockIntervals()
+	return fmt.Sprintf("[%v] The current view is: %v, chain growth rate is: %v, ave block interval is: %v", r.ID(), r.pm.GetCurView(), chainGrowthRate, blockIntervals)
+}
 
-// 	// if (r.VotedFor == "" || r.VotedFor == msg.CandidateID) && isLogUpToDate {
-// 	// 	r.VotedFor = msg.CandidateID // 투표를 부여
-// 	// 	r.CurrentTerm = msg.Term     // 현재 텀을 업데이트
-// 	// 	return true
-// 	// }
+func (r *Raft) updateHighQC(qc *blockchain.QC) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if qc.View > r.highQC.View {
+		r.highQC = qc
+	}
+}
 
-// 	return false
-// }
+func (r *Raft) processCertificate(qc *blockchain.QC) {
+	log.Debugf("[%v] is processing a QC, block id: %x", r.ID(), qc.BlockID)
+	if qc.View < r.pm.GetCurView() {
+		return
+	}
+	if qc.Leader != r.ID() {
+		quorumIsVerified, _ := crypto.VerifyQuorumSignature(qc.AggSig, qc.BlockID, qc.Signers)
+		if quorumIsVerified == false {
+			log.Warningf("[%v] received a quorum with invalid signatures", r.ID())
+			return
+		}
+	}
+	if r.IsByz() && config.GetConfig().Strategy == FORK && r.IsLeader(r.ID(), qc.View+1) {
+		r.pm.AdvanceView(qc.View)
+		return
+	}
+	err := r.updatePreferredView(qc)
+	if err != nil {
+		r.bufferedQCs[qc.BlockID] = qc
+		log.Debugf("[%v] a qc is buffered, view: %v, id: %x", r.ID(), qc.View, qc.BlockID)
+		return
+	}
+	r.pm.AdvanceView(qc.View)
+	r.updateHighQC(qc)
+	if qc.View < 3 {
+		return
+	}
+	ok, block, _ := r.commitRule(qc)
+	if !ok {
+		return
+	}
+	// forked blocks are found when pruning
+	committedBlocks, forkedBlocks, err := r.bc.CommitBlock(block.ID, r.pm.GetCurView())
+	if err != nil {
+		log.Errorf("[%v] cannot commit blocks, %w", r.ID(), err)
+		return
+	}
+	for _, cBlock := range committedBlocks {
+		r.committedBlocks <- cBlock
+	}
+	for _, fBlock := range forkedBlocks {
+		r.forkedBlocks <- fBlock
+	}
+}
 
-// func (r *Raft) ProcessResponseAppendEntries(msg *message.ResponseAppendEntries) {
+func (r *Raft) votingRule(block *blockchain.Block) (bool, error) {
+	if block.View <= 2 {
+		return true, nil
+	}
+	parentBlock, err := r.bc.GetParentBlock(block.ID)
+	if err != nil {
+		return false, fmt.Errorf("cannot vote for block: %w", err)
+	}
+	if (block.View <= r.lastVotedView) || (parentBlock.View < r.preferredView) {
+		return false, nil
+	}
+	return true, nil
+}
 
-// }
+func (r *Raft) commitRule(qc *blockchain.QC) (bool, *blockchain.Block, error) {
+	parentBlock, err := r.bc.GetParentBlock(qc.BlockID)
+	if err != nil {
+		return false, nil, fmt.Errorf("cannot commit any block: %w", err)
+	}
+	grandParentBlock, err := r.bc.GetParentBlock(parentBlock.ID)
+	if err != nil {
+		return false, nil, fmt.Errorf("cannot commit any block: %w", err)
+	}
+	if ((grandParentBlock.View + 1) == parentBlock.View) && ((parentBlock.View + 1) == qc.View) {
+		return true, grandParentBlock, nil
+	}
+	return false, nil, nil
+}
 
-// func (r *Raft) ProcessResponseVote(msg *message.ResponseVote) {
+func (r *Raft) updateLastVotedView(targetView types.View) error {
+	if targetView < r.lastVotedView {
+		return fmt.Errorf("target view is lower than the last voted view")
+	}
+	r.lastVotedView = targetView
+	return nil
+}
 
-// }
-
-//All Servers:
-//commitIndex > lastApplied: lastApplied++, log[lastApplied]를 state machine에 적용
-//Request, Response의 term이 currentTerm보다 크면 currentTerm = term, 현재 상태 = follower
+func (r *Raft) updatePreferredView(qc *blockchain.QC) error {
+	if qc.View <= 2 {
+		return nil
+	}
+	_, err := r.bc.GetBlockByID(qc.BlockID)
+	if err != nil {
+		return fmt.Errorf("cannot update preferred view: %w", err)
+	}
+	grandParentBlock, err := r.bc.GetParentBlock(qc.BlockID)
+	if err != nil {
+		return fmt.Errorf("cannot update preferred view: %w", err)
+	}
+	if grandParentBlock.View > r.preferredView {
+		r.preferredView = grandParentBlock.View
+	}
+	return nil
+}
