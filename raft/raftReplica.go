@@ -27,6 +27,8 @@ type Replica struct {
 	election.Election
 	config.Config
 
+	table map[string]int
+
 	pd            *mempool.Producer
 	pm            *pacemaker.Pacemaker
 	start         chan bool // signal to start the node
@@ -36,9 +38,9 @@ type Replica struct {
 	electionTimer *time.Timer // timeout for each view
 
 	// Persistent state on all servers
-	CurrentTerm types.View         // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
-	VotedFor    identity.NodeID    // 현재 term에서 투표한 candidate의 ID (없으면 null)
-	Log         []message.LogEntry // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
+	CurrentTerm types.View      // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
+	VotedFor    identity.NodeID // 현재 term에서 투표한 candidate의 ID (없으면 null)
+	logEntry    []message.Log   // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
 	VoteNum     map[types.View]int
 	TotalNum    int
 
@@ -47,8 +49,8 @@ type Replica struct {
 	LastApplied int // 상태 머신에 적용된 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
 
 	// Volatile state on leaders
-	NextIndex  map[message.LogEntry]int // 각 서버에 보낼 다음 로그 엔트리의 인덱스 (초기값 리더의 마지막 로그 인덱스 + 1)
-	MatchIndex map[message.LogEntry]int // 각 서버에 복제된 것으로 알려진 최고 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
+	NextIndex  map[message.Log]int // 각 서버에 보낼 다음 로그 엔트리의 인덱스 (초기값 리더의 마지막 로그 인덱스 + 1)
+	MatchIndex map[message.Log]int // 각 서버에 복제된 것으로 알려진 최고 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
 
 	committedBlocks chan *blockchain.Block
 	forkedBlocks    chan *blockchain.Block
@@ -101,11 +103,11 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.VotedFor = "" // 빈 문자열로 초기화
 	r.VoteNum = make(map[types.View]int)
 	r.TotalNum = config.GetConfig().N()
-	r.Log = []message.LogEntry{{}}                // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
-	r.CommitIndex = 0                             //커밋되어 있는 가장 높은 log entry의 index
-	r.LastApplied = 0                             //state machine에 적용된 가장 높은 log entry의 index
-	r.NextIndex = make(map[message.LogEntry]int)  // make 함수로 초기화
-	r.MatchIndex = make(map[message.LogEntry]int) // make 함수로 초기화
+	r.logEntry = []message.Log{{}}           // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
+	r.CommitIndex = 0                        //커밋되어 있는 가장 높은 log entry의 index
+	r.LastApplied = 0                        //state machine에 적용된 가장 높은 log entry의 index
+	r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
+	r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
 
 	r.Register(message.Transaction{}, r.handleTxn)
 	r.Register(message.Query{}, r.handleQuery)
@@ -361,46 +363,34 @@ func (r *Replica) Start() {
 		case message.RequestAppendEntries:
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
 			log.Debugf("[%v]가 ReqeustAppendEntries받음", r.ID())
-			
-			if v.Term < r.CurrentTerm{
+
+			if v.Term < r.CurrentTerm {
 				continue
 			}
-		
-		
+
 			// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-			if v.PrevLogIndex > 0 && (len(r.Log) < v.PrevLogIndex || r.Log[v.PrevLogIndex-1].Term != v.PrevLogTerm) {
-				// 로그가 비어있거나, prevLogIndex에 해당하는 로그 엔트리가 없거나, 해당 엔트리의 term이 다르면
+			if len(r.logEntry) < v.PrevLogIndex || r.logEntry[v.PrevLogIndex].Term != v.PrevLogTerm {
 				continue
 			}
-		
+
 			// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
-			for i := 0; i < len(v.Entries); i++ {
-				newIndex := v.PrevLogIndex + 1 + i
-				if newIndex <= len(r.Log) && r.Log[newIndex-1].Term != v.Entries[i].Term {
-					
-					break
+			for i := 0; i < len(v.Entries); i++ { //Entries의 index
+				if r.logEntry[i].Term != v.Entries[i].Term {
+					r.logEntry[i].Term = v.Entries[i].Term
 				}
 			}
-		
+
 			// 4. Append any new entries not already in the log
-			for i := 0; i < len(v.Entries); i++ {
-				newIndex := v.PrevLogIndex + 1 + i
-				if newIndex > len(r.Log) {
-					
-				}
-			}
-		
+			r.logEntry[v.PrevLogIndex].Command = v.Entries[v.PrevLogIndex].Command
+			r.logEntry[v.PrevLogIndex].Term = v.Entries[v.PrevLogIndex].Term
+
 			// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-			// if v.LeaderCommit > r.CommitIndex {
-			// 	lastNewEntryIndex := v.PrevLogIndex + len(v.Entries)
-			// 	if lastNewEntryIndex > r.CommitIndex {
-			// 		r.CommitIndex = min(v.LeaderCommit, lastNewEntryIndex)
-			// 	}
-			// }
-		
-		
-		
+			if v.LeaderCommit > r.CommitIndex {
+				r.CommitIndex = (v.LeaderCommit)
+			}
+
 			log.Debugf("[%v]가 RequestAppendEntries 처리 완료", r.ID())
+
 		case message.ResponseAppendEntries:
 			//r.RaftSafety.ProcessResponseAppendEntries(&v)
 
