@@ -330,9 +330,8 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 				r.eventChan <- view
 				log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
 				break L
-			case <-r.heartbeat.C: //electionTimeout 됐을 경우
-
-				// r.RaftSafety.ProcessElectionLocalTmo(r.pm.GetCurView()) //leader election 시작
+			case <-r.heartbeat.C: //heartbeat TMO
+				r.startElectionTimer() //leader election Timer 시작
 				break L
 
 			}
@@ -361,7 +360,47 @@ func (r *Replica) Start() {
 			// r.RaftSafety.ProcessRemoteTmo(&v)
 		case message.RequestAppendEntries:
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
-
+			log.Debugf("[%v]가 ReqeustAppendEntries받음", r.ID())
+			
+			if v.Term < r.CurrentTerm{
+				continue
+			}
+		
+		
+			// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+			if v.PrevLogIndex > 0 && (len(r.Log) < v.PrevLogIndex || r.Log[v.PrevLogIndex-1].Term != v.PrevLogTerm) {
+				// 로그가 비어있거나, prevLogIndex에 해당하는 로그 엔트리가 없거나, 해당 엔트리의 term이 다르면
+				continue
+			}
+		
+			// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
+			for i := 0; i < len(v.Entries); i++ {
+				newIndex := v.PrevLogIndex + 1 + i
+				if newIndex <= len(r.Log) && r.Log[newIndex-1].Term != v.Entries[i].Term {
+					
+					break
+				}
+			}
+		
+			// 4. Append any new entries not already in the log
+			for i := 0; i < len(v.Entries); i++ {
+				newIndex := v.PrevLogIndex + 1 + i
+				if newIndex > len(r.Log) {
+					
+				}
+			}
+		
+			// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+			// if v.LeaderCommit > r.CommitIndex {
+			// 	lastNewEntryIndex := v.PrevLogIndex + len(v.Entries)
+			// 	if lastNewEntryIndex > r.CommitIndex {
+			// 		r.CommitIndex = min(v.LeaderCommit, lastNewEntryIndex)
+			// 	}
+			// }
+		
+		
+		
+			log.Debugf("[%v]가 RequestAppendEntries 처리 완료", r.ID())
 		case message.ResponseAppendEntries:
 			//r.RaftSafety.ProcessResponseAppendEntries(&v)
 
@@ -393,8 +432,8 @@ func (r *Replica) Start() {
 				continue
 			}
 			r.SetState(types.LEADER)
+			r.startHeartbeatTimer()
 
-			// 리더가 되면 다른 노드들에게 하트비트 시작
 			// 클라이언트로 부터 받은 값으로 합의 시작
 			//r.RaftSafety.ProcessResponseVote(&v)
 		}
