@@ -116,6 +116,7 @@ type Command struct {
 type Log struct {
 	Command Command    // 상태 머신에 적용될 명령
 	Term    types.View // 수신된 term 번호
+	Index   int
 }
 
 // 타입정의
@@ -132,7 +133,7 @@ type RequestAppendEntries struct {
 type ResponseAppendEntries struct {
 	//Results:
 	Term    types.View
-	success bool // true it follower contained entry matching prevLogIndex and prevLogTerm
+	Success bool // true it follower contained entry matching prevLogIndex and prevLogTerm
 }
 
 type RequestVote struct {
