@@ -337,30 +337,25 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 	r.lastViewTime = time.Now()
 	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
 	for {
-		r.heartbeat.Reset(r.pm.GetTimerForView())
-	L:
-		for {
-			select {
-			case view := <-r.pm.EnteringViewEvent():
-				if view >= 2 {
-					r.totalVoteTime += time.Now().Sub(r.voteStart)
-				}
-				// measure round time
-				now := time.Now()
-				lasts := now.Sub(r.lastViewTime)
-				r.totalRoundTime += lasts
-				r.roundNo++
-				r.lastViewTime = now
-				r.eventChan <- view
-				log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
-				break L
-			case <-r.heartbeat.C: //heartbeat TMO
-				r.startElectionTimer() //leader election Timer 시작
-				break L
-
+		select {
+		case event := <-r.eventChan: // r.eventChan에서 메시지를 받았을 경우
+			switch msg := event.(type) {
+			case message.RequestAppendEntries:
+				//if) new leader로부터 AppendEntries를 받음: 다시 follower로 전환
+				log.Debugf("[%v]Received AppendEntries(heartbeat) from %v", r.ID(), msg.LeaderID)
+				// state = follower
+				r.SetState(types.FOLLOWER)
+				// timer reset
+				r.electionTimer.Reset(time.Duration(randomNumber) * time.Millisecond)
 			}
+			log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
+
+		case <-r.heartbeat.C: //heartbeat TMO
+			r.startElectionTimer() //leader election Timer 시작
+
 		}
 	}
+
 }
 
 // Start starts event loop
@@ -396,7 +391,7 @@ func (r *Replica) Start() {
 			// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 			if len(r.LogEntry) < v.PrevLogIndex || r.LogEntry[v.PrevLogIndex].Term != v.PrevLogTerm {
 				continue
-			}
+			} //질문: LogEntry == PrevLogIndex ? 414도
 
 			// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
 			for i := 1; i < len(v.Entries); i++ { //Entries의 index
@@ -411,7 +406,10 @@ func (r *Replica) Start() {
 
 			// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 			if v.LeaderCommit > r.CommitIndex {
-				r.CommitIndex = (v.LeaderCommit)
+				if v.LeaderCommit <= v.PrevLogIndex {
+					r.CommitIndex = (v.LeaderCommit)
+				}
+				r.CommitIndex = (v.PrevLogIndex)
 			}
 
 			msg := message.ResponseAppendEntries{
