@@ -339,24 +339,17 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
 
 	msg := message.RequestAppendEntries{
-		Term:        r.CurrentTerm,
-		LeaderID: r.ID(),
+		Term:         r.CurrentTerm,
+		LeaderID:     r.ID(),
 		PrevLogIndex: 0,
-		PrevLogTerm: r.CurrentTerm,
-		Entries: nil,
+		PrevLogTerm:  r.CurrentTerm,
+		Entries:      nil,
 		LeaderCommit: 0,
 	}
 	r.Broadcast(msg)
-	log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
-
-	select {
-	case <-r.heartbeat.C: //heartbeat TMO
-		r.startElectionTimer() //leader election Timer 시작
-
-	}
 }
 
-func (r *Replica) temp() {
+func (r *Replica) hearbeatTMOtest() {
 	for {
 		select {
 		case <-r.heartbeat.C: //heartbeat TMO
@@ -388,10 +381,20 @@ func (r *Replica) Start() {
 		case message.RequestAppendEntries:
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
 			//heartbeat reset
-			// HB 없으면 생성과 동시에 temp 함수 실행
-			// 있으면 reset
+			// HB 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
+			if r.heartbeat == nil {
+				log.Debugf("[%v] follower start heartbeatTimer", r.ID())
 
-			log.Debugf("[%v]가 ReqeustAppendEntries받음", r.ID())
+				r.lastViewTime = time.Now()
+				r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
+				go r.hearbeatTMOtest()
+			}
+			// 있으면 reset
+			if r.heartbeat != nil {
+				r.heartbeat.Reset()
+				log.Debugf("[%v]가 heartbeat Reset", r.ID())
+
+			}
 
 			if v.Term < r.CurrentTerm {
 				continue
