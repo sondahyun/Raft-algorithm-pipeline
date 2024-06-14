@@ -154,6 +154,7 @@ func (r *Replica) handleResponseAppendEntries(msg message.ResponseAppendEntries)
 }
 
 func (r *Replica) handleRequestVote(msg message.RequestVote) {
+	r.electionTimer.Stop()
 	r.eventChan <- msg
 }
 
@@ -336,26 +337,33 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 
 	r.lastViewTime = time.Now()
 	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
+
+	msg := message.RequestAppendEntries{
+		Term:        r.CurrentTerm,
+		LeaderID: r.ID(),
+		PrevLogIndex: 0,
+		PrevLogTerm: r.CurrentTerm,
+		Entries: nil,
+		LeaderCommit: 0,
+	}
+	r.Broadcast(msg)
+	log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
+
+	select {
+	case <-r.heartbeat.C: //heartbeat TMO
+		r.startElectionTimer() //leader election Timer 시작
+
+	}
+}
+
+func (r *Replica) temp() {
 	for {
 		select {
-		case event := <-r.eventChan: // r.eventChan에서 메시지를 받았을 경우
-			switch msg := event.(type) {
-			case message.RequestAppendEntries:
-				//if) new leader로부터 AppendEntries를 받음: 다시 follower로 전환
-				log.Debugf("[%v]Received AppendEntries(heartbeat) from %v", r.ID(), msg.LeaderID)
-				// state = follower
-				r.SetState(types.FOLLOWER)
-				// timer reset
-				r.electionTimer.Reset(time.Duration(randomNumber) * time.Millisecond)
-			}
-			log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
-
 		case <-r.heartbeat.C: //heartbeat TMO
-			r.startElectionTimer() //leader election Timer 시작
-
+			go r.startElectionTimer() //leader election Timer 시작
+			break
 		}
 	}
-
 }
 
 // Start starts event loop
@@ -365,8 +373,8 @@ func (r *Replica) Start() {
 	<-r.start
 	log.Debug("시작은 했음")
 
-	go r.startElectionTimer()    // startElectionTimer
-	go r.startHeartbeatTimer()   //heartbeat timer
+	go r.startElectionTimer() // startElectionTimer
+	// go r.startHeartbeatTimer()   //heartbeat timer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 
 	for r.isStarted.Load() {
@@ -379,6 +387,10 @@ func (r *Replica) Start() {
 			// r.RaftSafety.ProcessRemoteTmo(&v)
 		case message.RequestAppendEntries:
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
+			//heartbeat reset
+			// HB 없으면 생성과 동시에 temp 함수 실행
+			// 있으면 reset
+
 			log.Debugf("[%v]가 ReqeustAppendEntries받음", r.ID())
 
 			if v.Term < r.CurrentTerm {
@@ -466,7 +478,8 @@ func (r *Replica) Start() {
 				continue
 			}
 			r.SetState(types.LEADER)
-			r.startHeartbeatTimer()
+
+			go r.startHeartbeatTimer()
 
 			// 클라이언트로 부터 받은 값으로 합의 시작
 			//r.RaftSafety.ProcessResponseVote(&v)

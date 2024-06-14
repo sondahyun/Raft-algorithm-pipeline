@@ -122,12 +122,12 @@ type Log struct {
 // 타입정의
 type RequestAppendEntries struct {
 	//Arguments:
-	Term         types.View // leader의 term
-	LeaderID     string     // follower가 client 요청을 redirect할 수 있는 leader의 식별자
-	PrevLogIndex int        // 새로운 log entries가 추가 되기 전에, 바로 이전에 있는 log entry의 index
-	PrevLogTerm  types.View // PrevLogIndex에 해당하는 log entry의 term번호
-	Entries      []Log      // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
-	LeaderCommit int        // 리더의 commitIndex 값, follower의 commitIndex를 업데이트하는데 사용
+	Term         types.View      // leader의 term
+	LeaderID     identity.NodeID // follower가 client 요청을 redirect할 수 있는 leader의 식별자
+	PrevLogIndex int             // 새로운 log entries가 추가 되기 전에, 바로 이전에 있는 log entry의 index
+	PrevLogTerm  types.View      // PrevLogIndex에 해당하는 log entry의 term번호
+	Entries      []Log           // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
+	LeaderCommit int             // 리더의 commitIndex 값, follower의 commitIndex를 업데이트하는데 사용
 }
 
 type ResponseAppendEntries struct {
