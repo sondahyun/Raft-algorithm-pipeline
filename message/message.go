@@ -34,6 +34,8 @@ type Transaction struct {
 	NodeID     identity.NodeID // forward by node
 	ID         string
 	C          chan TransactionReply // reply channel created by request receiver
+	Key        string
+	Value      int
 }
 
 // TransactionReply replies to current client session
@@ -128,6 +130,8 @@ type RequestAppendEntries struct {
 	PrevLogTerm  types.View      // PrevLogIndex에 해당하는 log entry의 term번호
 	Entries      []Log           // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
 	LeaderCommit int             // 리더의 commitIndex 값, follower의 commitIndex를 업데이트하는데 사용
+	Key          string
+	Value        int
 }
 
 type ResponseAppendEntries struct {
@@ -148,4 +152,10 @@ type ResponseVote struct {
 	//Results:
 	Term        types.View // candidate가 자신을 update하기 위해 사용하는 현재 term
 	VoteGranted bool       // true means candidate received vote (true: 후보자가 투표받았음)
+}
+
+type RaftTransaction struct {
+	ID    uint64
+	Key   string
+	Value int
 }

@@ -72,6 +72,8 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 	req.NodeID = n.id
 	req.Timestamp = time.Now()
 	req.ID = r.RequestURI
+	req.Key = "X"
+	req.Value = 0
 	n.TxChan <- req
 
 	//reply := <-req.C

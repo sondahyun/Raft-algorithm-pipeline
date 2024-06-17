@@ -27,7 +27,8 @@ type Replica struct {
 	election.Election
 	config.Config
 
-	table map[string]int
+	table     map[string]int
+	checkVote map[types.View]bool
 
 	pd            *mempool.Producer
 	pm            *pacemaker.Pacemaker
@@ -100,6 +101,8 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(pacemaker.TMO{}, r.HandleTmo)
 
 	//초기화
+	r.table = make(map[string]int)
+	r.checkVote = make(map[types.View]bool)
 	r.CurrentTerm = types.View(0)
 	r.VotedFor = "" // 빈 문자열로 초기화
 	r.VoteNum = make(map[types.View]int)
@@ -154,7 +157,6 @@ func (r *Replica) handleResponseAppendEntries(msg message.ResponseAppendEntries)
 }
 
 func (r *Replica) handleRequestVote(msg message.RequestVote) {
-	r.electionTimer.Stop()
 	r.eventChan <- msg
 }
 
@@ -264,6 +266,25 @@ func (r *Replica) proposeBlock(view types.View) {
 	r.voteStart = time.Now()
 }
 
+func (r *Replica) ProcessLog() {
+
+	txs := r.pd.GeneratePayload()
+	tx := txs[0]
+
+	msg := message.RequestAppendEntries{
+		Term:         r.CurrentTerm,
+		LeaderID:     r.ID(),
+		PrevLogIndex: 0,
+		PrevLogTerm:  r.CurrentTerm,
+		Entries:      nil,
+		LeaderCommit: 0,
+		Key:          tx.Key,
+		Value:        tx.Value,
+	}
+
+	r.Broadcast(msg)
+}
+
 // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 func (r *Replica) ListenCommittedBlocks() {
 	for {
@@ -296,37 +317,60 @@ func (r *Replica) startElectionTimer() {
 	randomNumber := rand.Intn(100) + 100
 	r.electionTimer = time.NewTimer(time.Duration(randomNumber) * time.Millisecond)
 
-	for {
-		select {
-		case event := <-r.eventChan: // r.eventChan에서 메시지를 받았을 경우
-			switch msg := event.(type) {
-			case message.RequestAppendEntries:
-				//if) new leader로부터 AppendEntries를 받음: 다시 follower로 전환
-				log.Debugf("[%v]Received AppendEntries from %v", r.ID(), msg.LeaderID)
-				// state = follower
-				r.SetState(types.FOLLOWER)
-				// timer reset
-				r.electionTimer.Reset(time.Duration(randomNumber) * time.Millisecond)
-			}
-		case <-r.electionTimer.C: //r.electionTimer.C channel로부터 메시지를 받을 때(타이머 만료)까지 대기(block)
-			r.SetState(types.CANDIDATE)
-			r.CurrentTerm++
-			msg := message.RequestVote{
-				Term:         r.CurrentTerm,
-				CandidateID:  r.Node.ID(),
-				LastLogIndex: r.CommitIndex,
-				LastLogTerm:  r.CurrentTerm, //candidate의 마지막 log entry의 term
-			}
-			// vote for self
-			r.VoteNum[r.CurrentTerm]++
-			log.Debugf("[%v]vote mySelf", r.ID())
+	// 여기서 타이머 기다리는 중
 
-			// send RequestVote message to all server
-			r.Broadcast(msg)
-			log.Debugf("[%v]finish startElectionTimer", r.ID())
+	<-r.electionTimer.C
+	log.Debugf("[%v]election timer is done", r.ID())
+	r.SetState(types.CANDIDATE)
+	r.CurrentTerm++
 
-		}
+	msg := message.RequestVote{
+		Term:         r.CurrentTerm,
+		CandidateID:  r.Node.ID(),
+		LastLogIndex: r.CommitIndex,                  //candidate의 마지막 log entry의 index
+		LastLogTerm:  r.LogEntry[r.CommitIndex].Term, //candidate의 마지막 log entry의 term
 	}
+
+	// vote for self
+	r.VoteNum[r.CurrentTerm]++
+	log.Debugf("[%v]vote mySelf", r.ID())
+
+	// send RequestVote message to all server
+	r.Broadcast(msg)
+	log.Debugf("[%v]finish startElectionTimer", r.ID())
+
+	// for {
+	// 	select {
+	// 	case event := <-r.eventChan: // r.eventChan에서 메시지를 받았을 경우
+	// 		switch msg := event.(type) {
+	// 		case message.RequestAppendEntries:
+	// 			//if) new leader로부터 AppendEntries를 받음: 다시 follower로 전환
+	// 			log.Debugf("[%v]Received AppendEntries from %v", r.ID(), msg.LeaderID)
+	// 			// state = follower
+	// 			r.SetState(types.FOLLOWER)
+	// 			// timer reset
+	// 			r.electionTimer.Reset(time.Duration(randomNumber) * time.Millisecond)
+	// 		}
+	// 	case <-r.electionTimer.C: //r.electionTimer.C channel로부터 메시지를 받을 때(타이머 만료)까지 대기(block)
+	// 		r.SetState(types.CANDIDATE)
+	// 		r.CurrentTerm++
+
+	// 		msg := message.RequestVote{
+	// 			Term:         r.CurrentTerm,
+	// 			CandidateID:  r.Node.ID(),
+	// 			LastLogIndex: r.CommitIndex,                  //candidate의 마지막 log entry의 index
+	// 			LastLogTerm:  r.LogEntry[r.CommitIndex].Term, //candidate의 마지막 log entry의 term
+	// 		}
+	// 		// vote for self
+	// 		r.VoteNum[r.CurrentTerm]++
+	// 		log.Debugf("[%v]vote mySelf", r.ID())
+
+	// 		// send RequestVote message to all server
+	// 		r.Broadcast(msg)
+	// 		log.Debugf("[%v]finish startElectionTimer", r.ID())
+
+	// 	}
+	// }
 }
 
 // startHeartbeatTimer listens new view and timeout events
@@ -335,28 +379,35 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 	//리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
 	log.Debugf("[%v]start heartbeatTimer", r.ID())
 
-	r.lastViewTime = time.Now()
-	r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
+	for r.GetState() == types.LEADER {
+		randomNumber := rand.Intn(100) + 100
+		r.heartbeat = time.NewTimer(time.Duration(randomNumber/2) * time.Millisecond)
 
-	msg := message.RequestAppendEntries{
-		Term:         r.CurrentTerm,
-		LeaderID:     r.ID(),
-		PrevLogIndex: 0,
-		PrevLogTerm:  r.CurrentTerm,
-		Entries:      nil,
-		LeaderCommit: 0,
+		<-r.heartbeat.C
+
+		msg := message.RequestAppendEntries{
+			Term:         r.CurrentTerm,
+			LeaderID:     r.ID(),
+			PrevLogIndex: 0,
+			PrevLogTerm:  r.CurrentTerm,
+			Entries:      nil,
+			LeaderCommit: 0,
+		}
+		r.Broadcast(msg)
 	}
-	r.Broadcast(msg)
 }
 
 func (r *Replica) hearbeatTMOtest() {
-	for {
-		select {
-		case <-r.heartbeat.C: //heartbeat TMO
-			go r.startElectionTimer() //leader election Timer 시작
-			break
-		}
-	}
+	<-r.heartbeat.C
+	r.heartbeat = nil
+	go r.startElectionTimer()
+	// for {
+	// 	select {
+	// 	case <-r.heartbeat.C: //heartbeat TMO
+	// 		go r.startElectionTimer() //leader election Timer 시작
+	// 		return
+	// 	}
+	// }
 }
 
 // Start starts event loop
@@ -366,8 +417,7 @@ func (r *Replica) Start() {
 	<-r.start
 	log.Debug("시작은 했음")
 
-	go r.startElectionTimer() // startElectionTimer
-	// go r.startHeartbeatTimer()   //heartbeat timer
+	go r.startElectionTimer()    // startElectionTimer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 
 	for r.isStarted.Load() {
@@ -381,22 +431,21 @@ func (r *Replica) Start() {
 		case message.RequestAppendEntries:
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
 			//heartbeat reset
-			// HB 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
+			// HeartBeat 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
 			if r.heartbeat == nil {
 				log.Debugf("[%v] follower start heartbeatTimer", r.ID())
 
-				r.lastViewTime = time.Now()
-				r.heartbeat = time.NewTimer(r.pm.GetTimerForView())
+				randomNumber := rand.Intn(100) + 100
+				r.heartbeat = time.NewTimer(time.Duration(randomNumber) * time.Millisecond)
 				go r.hearbeatTMOtest()
 			}
-			// 있으면 reset
-			if r.heartbeat != nil {
-				r.heartbeat.Reset()
-				log.Debugf("[%v]가 heartbeat Reset", r.ID())
+			randomNumber := rand.Intn(100) + 100
+			r.heartbeat.Reset(time.Duration(randomNumber) * time.Millisecond)
 
-			}
+			r.table[v.Key] = v.Value
 
 			if v.Term < r.CurrentTerm {
+				log.Debug("이상해씨")
 				continue
 			}
 			if v.Term > r.CurrentTerm {
@@ -405,6 +454,7 @@ func (r *Replica) Start() {
 
 			// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 			if len(r.LogEntry) < v.PrevLogIndex || r.LogEntry[v.PrevLogIndex].Term != v.PrevLogTerm {
+				log.Debugf("[%v]피카츄", r.ID())
 				continue
 			} //질문: LogEntry == PrevLogIndex ? 414도
 
@@ -450,6 +500,7 @@ func (r *Replica) Start() {
 			//client에 값 전달
 		case message.RequestVote:
 			log.Debugf("[%v]가 ReqeustVote받음", r.ID())
+
 			// leader, candidate pass
 			if r.GetState() != types.FOLLOWER {
 				continue
@@ -477,12 +528,13 @@ func (r *Replica) Start() {
 			if v.VoteGranted {
 				r.VoteNum[v.Term]++
 			}
-			if r.VoteNum[v.Term] <= r.TotalNum/2 { //quorum 만족X
+			if r.VoteNum[v.Term] < r.TotalNum { //quorum 만족X
 				continue
 			}
 			r.SetState(types.LEADER)
 
 			go r.startHeartbeatTimer()
+			r.ProcessLog()
 
 			// 클라이언트로 부터 받은 값으로 합의 시작
 			//r.RaftSafety.ProcessResponseVote(&v)
