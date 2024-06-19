@@ -377,14 +377,14 @@ func (r *Replica) startElectionTimer() {
 // heartbeat Timer
 func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontimeout되면 heartbeat멈춤
 	//리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
-	log.Debugf("[%v]start heartbeatTimer", r.ID())
+	log.Debugf("[%v] leader start heartbeatTimer", r.ID())
 
 	for r.GetState() == types.LEADER {
 		randomNumber := rand.Intn(100) + 100
 		r.heartbeat = time.NewTimer(time.Duration(randomNumber/2) * time.Millisecond)
 
 		<-r.heartbeat.C
-
+		log.Debugf("[%v]leader send RequestAppendEntries", r.ID())
 		msg := message.RequestAppendEntries{
 			Term:         r.CurrentTerm,
 			LeaderID:     r.ID(),
@@ -432,6 +432,8 @@ func (r *Replica) Start() {
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
 			//heartbeat reset
 			// HeartBeat 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
+			log.Debugf("[%v] follower가 RequestAppendEntries 받음", r.ID())
+
 			if r.heartbeat == nil {
 				log.Debugf("[%v] follower start heartbeatTimer", r.ID())
 
@@ -445,7 +447,7 @@ func (r *Replica) Start() {
 			r.table[v.Key] = v.Value
 
 			if v.Term < r.CurrentTerm {
-				log.Debug("이상해씨")
+				//log.Debug("이상해씨")
 				continue
 			}
 			if v.Term > r.CurrentTerm {
@@ -454,7 +456,7 @@ func (r *Replica) Start() {
 
 			// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 			if len(r.LogEntry) < v.PrevLogIndex || r.LogEntry[v.PrevLogIndex].Term != v.PrevLogTerm {
-				log.Debugf("[%v]피카츄", r.ID())
+				//log.Debugf("[%v]피카츄", r.ID())
 				continue
 			} //질문: LogEntry == PrevLogIndex ? 414도
 
@@ -521,6 +523,8 @@ func (r *Replica) Start() {
 			r.Send(v.CandidateID, msg)
 
 		case message.ResponseVote:
+			log.Debugf("[%v] 정족수 확인", r.ID())
+
 			// 받은 투표를 확인해서 정족수에 충족하면 리더가 됨
 			if v.Term > r.CurrentTerm {
 				r.CurrentTerm = v.Term
