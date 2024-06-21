@@ -1,9 +1,9 @@
 #!/bin/bash
 
-bash simulation.sh
-bash runClient.sh
+bash simulation.sh 
+bash runClient.sh 
 
-sleep 5
+sleep 100
 
 bash closeClient.sh
 bash stop.sh
