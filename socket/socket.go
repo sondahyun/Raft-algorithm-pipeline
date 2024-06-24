@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -204,6 +205,7 @@ func (s *socket) Flaky(id identity.NodeID, p float64, t int) {
 }
 
 func (s *socket) Crash(t int) {
+	fmt.Println(s.id, "leader die")
 	s.crash = true
 	if t > 0 {
 		timer := time.NewTimer(time.Duration(t) * time.Second)

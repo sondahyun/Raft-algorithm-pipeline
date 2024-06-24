@@ -72,10 +72,22 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 	req.NodeID = n.id
 	req.Timestamp = time.Now()
 	req.ID = r.RequestURI
-	req.Key = "X"
-	req.Value = 0
-	n.TxChan <- req
 
+	// 랜덤 Key 값 설정
+	rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	//rand.Seed(time.Now().UnixNano())
+
+	keys := []string{"X", "Y", "Z"}
+
+	req.Key = keys[rand.Intn(len(keys))]
+
+	// 랜덤 Value 값 설정 (1 ~ 10)
+	req.Value = rand.Intn(10) + 1
+	n.TxChan <- req
+	// for {
+
+	// }
 	//reply := <-req.C
 	//
 	//log.Debugf("[%v] tx %v delay is %v", n.id, req.ID, strconv.Itoa(int(reply.Delay.Nanoseconds())))
@@ -93,6 +105,12 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (n *node) handleCrash(w http.ResponseWriter, r *http.Request) {
 	n.Socket.Crash(config.GetConfig().Crash)
+	n.fault = true
+	timer := time.NewTimer(time.Duration(config.GetConfig().Crash) * time.Second)
+	go func() {
+		<-timer.C
+		n.fault = false
+	}()
 }
 
 func (n *node) handleSlow(w http.ResponseWriter, r *http.Request) {

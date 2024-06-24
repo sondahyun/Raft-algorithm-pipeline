@@ -112,11 +112,13 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.LastApplied = 0                        //state machine에 적용된 가장 높은 log entry의 index
 	r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
 	r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
+	r.SuccessNum = make(map[types.View]int)
 
 	r.Register(message.Transaction{}, r.handleTxn)
 	r.Register(message.Query{}, r.handleQuery)
 	r.Register(message.RequestAppendEntries{}, r.handleRequestAppendEntries)
 	r.Register(message.ResponseAppendEntries{}, r.handleResponseAppendEntries)
+	r.Register(message.CommitAppendEntries{}, r.handleCommitAppendEntries)
 	r.Register(message.RequestVote{}, r.handleRequestVote)
 	r.Register(message.ResponseVote{}, r.handleResponseVote)
 
@@ -126,6 +128,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	gob.Register(pacemaker.TMO{})
 	gob.Register(message.RequestAppendEntries{})
 	gob.Register(message.ResponseAppendEntries{})
+	gob.Register(message.CommitAppendEntries{})
 	gob.Register(message.RequestVote{})
 	gob.Register(message.ResponseVote{})
 
@@ -153,6 +156,10 @@ func (r *Replica) handleRequestAppendEntries(msg message.RequestAppendEntries) {
 }
 
 func (r *Replica) handleResponseAppendEntries(msg message.ResponseAppendEntries) {
+	r.eventChan <- msg
+}
+
+func (r *Replica) handleCommitAppendEntries(msg message.ResponseAppendEntries) {
 	r.eventChan <- msg
 }
 
@@ -266,23 +273,31 @@ func (r *Replica) proposeBlock(view types.View) {
 	r.voteStart = time.Now()
 }
 
-func (r *Replica) ProcessLog() {
+func (r *Replica) ProcessLog() { //leader
 
 	txs := r.pd.GeneratePayload()
 	tx := txs[0]
 
+	AddLog := message.Log{
+		Command: &message.Command{
+			Key:   tx.Key,
+			Value: tx.Value,
+		},
+		Term: r.CurrentTerm,
+	}
 	msg := message.RequestAppendEntries{
 		Term:         r.CurrentTerm,
 		LeaderID:     r.ID(),
-		PrevLogIndex: 0,
-		PrevLogTerm:  r.CurrentTerm,
-		Entries:      nil,
+		PrevLogIndex: len(r.LogEntry) - 1,
+		PrevLogTerm:  r.CurrentTerm - 1,
+		Entries:      AddLog,
 		LeaderCommit: 0,
-		Key:          tx.Key,
-		Value:        tx.Value,
 	}
 
 	r.Broadcast(msg)
+
+	log.Debugf("[%v] Leader Broadcast Real RequestAppendEntries", r.ID())
+
 }
 
 // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
@@ -309,9 +324,10 @@ func (r *Replica) startSignal() {
 
 func (r *Replica) startElectionTimer() {
 	log.Debugf("[%v]start startElectionTimer", r.ID())
-
 	//seed (현재시간 기준)
-	rand.Seed(time.Now().UnixNano())
+	rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	//rand.Seed(time.Now().UnixNano())
 
 	// 0~99까지의 난수 생성
 	randomNumber := rand.Intn(100) + 100
@@ -320,7 +336,8 @@ func (r *Replica) startElectionTimer() {
 	// 여기서 타이머 기다리는 중
 
 	<-r.electionTimer.C
-	log.Debugf("[%v]election timer is done", r.ID())
+	log.Debugf("[%v] Election timer TMO", r.ID())
+
 	r.SetState(types.CANDIDATE)
 	r.CurrentTerm++
 
@@ -337,6 +354,8 @@ func (r *Replica) startElectionTimer() {
 
 	// send RequestVote message to all server
 	r.Broadcast(msg)
+	log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
+
 	log.Debugf("[%v]finish startElectionTimer", r.ID())
 
 	// for {
@@ -378,28 +397,41 @@ func (r *Replica) startElectionTimer() {
 func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontimeout되면 heartbeat멈춤
 	//리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
 	log.Debugf("[%v] leader start heartbeatTimer", r.ID())
+	log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
 
-	for r.GetState() == types.LEADER {
+	for r.GetState() == types.LEADER && !r.IsFault() {
 		randomNumber := rand.Intn(100) + 100
 		r.heartbeat = time.NewTimer(time.Duration(randomNumber/2) * time.Millisecond)
 
 		<-r.heartbeat.C
+
+		AddLog := message.Log{
+			Command: &message.Command{
+				Key:   "",
+				Value: 0,
+			},
+			Term: r.CurrentTerm,
+		}
 		log.Debugf("[%v]leader send RequestAppendEntries", r.ID())
 		msg := message.RequestAppendEntries{
 			Term:         r.CurrentTerm,
 			LeaderID:     r.ID(),
 			PrevLogIndex: 0,
 			PrevLogTerm:  r.CurrentTerm,
-			Entries:      nil,
+			Entries:      AddLog,
 			LeaderCommit: 0,
 		}
 		r.Broadcast(msg)
+		log.Debugf("[%v] Leader Broadcast Empty RequestAppendEntries", r.ID())
 	}
+	r.SetState(types.FOLLOWER)
 }
 
 func (r *Replica) hearbeatTMOtest() {
 	<-r.heartbeat.C
 	r.heartbeat = nil
+	log.Debugf("[%v] Heartbeat timer TMO", r.ID())
+
 	go r.startElectionTimer()
 	// for {
 	// 	select {
@@ -415,7 +447,8 @@ func (r *Replica) Start() {
 	go r.Run()
 	// wait for the start signal
 	<-r.start
-	log.Debug("시작은 했음")
+	log.Debugf("[%v] node start", r.ID())
+	log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
 
 	go r.startElectionTimer()    // startElectionTimer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
@@ -428,7 +461,7 @@ func (r *Replica) Start() {
 		// 	r.processNewView(v)
 		case pacemaker.TMO:
 			// r.RaftSafety.ProcessRemoteTmo(&v)
-		case message.RequestAppendEntries:
+		case message.RequestAppendEntries: //Follwer
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
 			//heartbeat reset
 			// HeartBeat 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
@@ -439,55 +472,102 @@ func (r *Replica) Start() {
 
 				randomNumber := rand.Intn(100) + 100
 				r.heartbeat = time.NewTimer(time.Duration(randomNumber) * time.Millisecond)
+				log.Debugf("[%v] randomNumber", randomNumber)
+
 				go r.hearbeatTMOtest()
 			}
 			randomNumber := rand.Intn(100) + 100
 			r.heartbeat.Reset(time.Duration(randomNumber) * time.Millisecond)
+			go r.hearbeatTMOtest()
 
-			r.table[v.Key] = v.Value
+			//Add AppendEntries (Entries != empty)
+			if v.Entries.Command.Key != "" {
+				r.table[v.Entries.Command.Key] = v.Entries.Command.Value
 
-			if v.Term < r.CurrentTerm {
-				//log.Debug("이상해씨")
-				continue
-			}
-			if v.Term > r.CurrentTerm {
-				r.CurrentTerm = v.Term
-			}
-
-			// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-			if len(r.LogEntry) < v.PrevLogIndex || r.LogEntry[v.PrevLogIndex].Term != v.PrevLogTerm {
-				//log.Debugf("[%v]피카츄", r.ID())
-				continue
-			} //질문: LogEntry == PrevLogIndex ? 414도
-
-			// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
-			for i := 1; i < len(v.Entries); i++ { //Entries의 index
-				if r.LogEntry[i].Term != v.Entries[i].Term {
-					r.LogEntry[i].Term = v.Entries[i].Term
+				if v.Term < r.CurrentTerm {
+					//log.Debug("이상해씨")
+					continue
 				}
-			}
-
-			// 4. Append any new entries not already in the log
-			r.LogEntry[v.PrevLogIndex+1].Command = v.Entries[v.PrevLogIndex+1].Command
-			r.LogEntry[v.PrevLogIndex+1].Term = v.Entries[v.PrevLogIndex+1].Term
-
-			// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-			if v.LeaderCommit > r.CommitIndex {
-				if v.LeaderCommit <= v.PrevLogIndex {
-					r.CommitIndex = (v.LeaderCommit)
+				if v.Term > r.CurrentTerm {
+					r.CurrentTerm = v.Term
 				}
-				r.CommitIndex = (v.PrevLogIndex)
+
+				// // 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+				// if len(r.LogEntry) < v.PrevLogIndex || r.LogEntry[v.PrevLogIndex].Term != v.PrevLogTerm {
+				// 	log.Debugf("[%v]피카츄", r.ID())
+				// 	continue
+				// } //질문: LogEntry == PrevLogIndex ? 414도
+
+				// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
+				//Entries의 index
+				// 기존 항목이 새 항목과 충돌하는 경우(인덱스는 같지만 용어가 다른 경우), 기존 항목과 그 뒤에 오는 모든 항목을 삭제합니다.
+				if v.PrevLogIndex > 0 {
+					if r.LogEntry[v.PrevLogIndex+1].Term != v.Entries.Term {
+						r.LogEntry = r.LogEntry[:v.PrevLogIndex+1]
+						log.Debugf("[%v]기존 항목이 새 항목과 충돌", r.ID())
+					}
+				}
+
+				// // 4. Append any new entries not already in the log
+				// r.LogEntry[v.PrevLogIndex+1].Command = v.Entries[v.PrevLogIndex+1].Command
+				// r.LogEntry[v.PrevLogIndex+1].Term = v.Entries[v.PrevLogIndex+1].Term
+				// log.Debugf("[%v]피카츄2", r.ID())
+
+				// // 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+				// if v.LeaderCommit > r.CommitIndex {
+				// 	if v.LeaderCommit <= v.PrevLogIndex {
+				// 		r.CommitIndex = (v.LeaderCommit)
+				// 	}
+				// 	r.CommitIndex = (v.PrevLogIndex)
+				// }
+				// log.Debugf("[%v]피카츄3", r.ID())
+
+				// AddLog := message.Log{
+				// 	Command: message.Command{
+				// 		Key:   v.Key,
+				// 		Value: v.Value,
+				// 	},
+				// 	Term:  r.CurrentTerm,
+				// 	Index: 0, // 인덱스 1로 설정
+				// }
+
+				// r.LogEntry = append(r.LogEntry, AddLog)
+
+				// log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
+				// //log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
+				// // 원하는 형태로 LogEntry 배열 출력
+				// logEntriesStr := fmt.Sprintf("[%v] currentTerm: [%v], LogEntries[%d] ->", r.ID(), r.CurrentTerm, len(r.LogEntry)-1)
+				// for i, logEntry := range r.LogEntry {
+				// 	if i == 0 {
+				// 		continue
+				// 	}
+				// 	logEntriesStr += fmt.Sprintf(" [%s<=%d]", logEntry.Command.Key, logEntry.Command.Value)
+				// }
+				// log.Debugf(logEntriesStr)
+
+				msg := message.ResponseAppendEntries{
+					Term:    r.CurrentTerm,
+					Success: true,
+					Entries: v.Entries,
+				}
+				r.Send(identity.NodeID(v.LeaderID), msg)
+
+				log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료", r.ID())
 			}
+			if v.Entries.Command.Key == "" { //질문: heartbeat append entries수신후 responseAppendEntreis에 msg 보내야되는지
+				// msg := message.ResponseAppendEntries{
+				// 	Term:    r.CurrentTerm,
+				// 	Success: true,
+				// 	Entries: v.Entries,
+				// }
+				// r.Send(identity.NodeID(v.LeaderID), msg)
 
-			msg := message.ResponseAppendEntries{
-				Term:    r.CurrentTerm,
-				Success: true,
+				log.Debugf("[%v] follower가 empty RequestAppendEntries 처리 완료", r.ID())
+
 			}
-			r.Send(identity.NodeID(v.LeaderID), msg)
+			log.Debugf("[%v] follower가 ResponseAppendEntries send", r.ID())
 
-			log.Debugf("[%v]가 RequestAppendEntries 처리 완료", r.ID())
-
-		case message.ResponseAppendEntries:
+		case message.ResponseAppendEntries: //leader
 			if v.Term > r.CurrentTerm {
 				r.CurrentTerm = v.Term
 			}
@@ -497,9 +577,34 @@ func (r *Replica) Start() {
 			if r.SuccessNum[v.Term] != r.TotalNum { //모든 follower가 success하지 않으면 continue
 				continue
 			}
+			msg := message.CommitAppendEntries{
+				Term:    r.CurrentTerm,
+				Entries: v.Entries,
+			}
+			r.Broadcast(msg)
+			r.LogEntry = append(r.LogEntry, v.Entries)
+			log.Debugf("[%v] leader가 LogRepli 정족수 확인 완료", r.ID())
+			log.Debugf("[%v] leader가 LogReplication 완료하고 CommitAppendEntreis broadcast", r.ID())
 
 			//leader가 commit
 			//client에 값 전달
+		case message.CommitAppendEntries:
+			r.LogEntry = append(r.LogEntry, v.Entries)
+			log.Debugf("[%v]가 CommitAppendEntries 처리 완료", r.ID())
+			log.Debugf("[%v] follower가 LogReplication 완료", r.ID())
+
+			//log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
+			//log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
+			// 원하는 형태로 LogEntry 배열 출력
+			logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] ->", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
+			for i, logEntry := range r.LogEntry {
+				if i == 0 {
+					continue
+				}
+				logEntriesStr += fmt.Sprintf(" [%s<=%d]", logEntry.Command.Key, logEntry.Command.Value)
+			}
+			log.Debugf(logEntriesStr)
+
 		case message.RequestVote:
 			log.Debugf("[%v]가 ReqeustVote받음", r.ID())
 
@@ -515,16 +620,19 @@ func (r *Replica) Start() {
 			}
 			// follower
 			r.electionTimer.Stop() // follower가 candidate가 되는 것을 막는 로직
+			log.Debugf("[%v] follower가 electionTimer Stop", r.ID())
+
 			// Request확인, vote to candidate
 			msg := message.ResponseVote{
 				Term:        r.CurrentTerm,
 				VoteGranted: true,
 			}
 			r.Send(v.CandidateID, msg)
+			log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
+
+			log.Debugf("[%v] follower가 Send ResponseVote", r.ID())
 
 		case message.ResponseVote:
-			log.Debugf("[%v] 정족수 확인", r.ID())
-
 			// 받은 투표를 확인해서 정족수에 충족하면 리더가 됨
 			if v.Term > r.CurrentTerm {
 				r.CurrentTerm = v.Term
@@ -535,7 +643,15 @@ func (r *Replica) Start() {
 			if r.VoteNum[v.Term] < r.TotalNum { //quorum 만족X
 				continue
 			}
+			// if r.VoteNum[v.Term] <= r.TotalNum/2 { //quorum 만족X
+			// 	continue
+			// }
+
+			log.Debugf("[%v] Receive ResponseVote, 정족수 확인 완료", r.ID())
+			log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
+
 			r.SetState(types.LEADER)
+			log.Debugf("[%v]가 leader", r.ID())
 
 			go r.startHeartbeatTimer()
 			r.ProcessLog()

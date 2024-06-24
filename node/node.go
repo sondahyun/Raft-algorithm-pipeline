@@ -26,6 +26,7 @@ type Node interface {
 	IsByz() bool
 	SetState(state types.NodeState)
 	GetState() types.NodeState
+	IsFault() bool
 }
 
 // node implements Node interface
@@ -44,6 +45,7 @@ type node struct {
 	server      *http.Server
 	isByz       bool
 	totalTxn    int
+	fault       bool
 
 	sync.RWMutex
 	forwards map[string]*message.Transaction
@@ -56,6 +58,7 @@ func NewNode(id identity.NodeID, isByz bool) Node {
 		state:  types.FOLLOWER,
 		isByz:  isByz,
 		Socket: socket.NewSocket(id, config.Configuration.Addrs),
+		fault:  false,
 		//Database:    NewDatabase(),
 		MessageChan: make(chan interface{}, config.Configuration.ChanBufferSize),
 		TxChan:      make(chan interface{}, config.Configuration.ChanBufferSize),
@@ -223,4 +226,8 @@ func (n *node) Forward(id identity.NodeID, m message.Transaction) {
 	n.forwards[m.Command.String()] = &m
 	n.Unlock()
 	n.Send(id, m)
+}
+
+func (n *node) IsFault() bool {
+	return n.fault
 }

@@ -99,6 +99,7 @@ func (c *HTTPClient) rest(url string, value db.Value) error {
 	}
 	//v, _ := ioutil.ReadAll(body)
 	//log.Debugf("payload is %x", v)
+	log.Debug(url)
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		log.Error(err)
