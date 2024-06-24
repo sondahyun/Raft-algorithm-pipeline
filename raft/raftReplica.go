@@ -159,7 +159,7 @@ func (r *Replica) handleResponseAppendEntries(msg message.ResponseAppendEntries)
 	r.eventChan <- msg
 }
 
-func (r *Replica) handleCommitAppendEntries(msg message.ResponseAppendEntries) {
+func (r *Replica) handleCommitAppendEntries(msg message.CommitAppendEntries) {
 	r.eventChan <- msg
 }
 
@@ -574,7 +574,7 @@ func (r *Replica) Start() {
 			if v.Success {
 				r.SuccessNum[v.Term]++
 			}
-			if r.SuccessNum[v.Term] != r.TotalNum { //모든 follower가 success하지 않으면 continue
+			if r.SuccessNum[v.Term] <= r.TotalNum/2 { //모든 follower가 success하지 않으면 continue
 				continue
 			}
 			msg := message.CommitAppendEntries{
