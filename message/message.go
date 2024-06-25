@@ -133,9 +133,10 @@ type RequestAppendEntries struct {
 
 type ResponseAppendEntries struct {
 	//Results:
-	Term    types.View
-	Success bool // true it follower contained entry matching prevLogIndex and prevLogTerm
-	Entries Log  // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
+	Term      types.View
+	Success   bool // true it follower contained entry matching prevLogIndex and prevLogTerm
+	Entries   Log  // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
+	LastIndex int
 }
 
 type CommitAppendEntries struct {

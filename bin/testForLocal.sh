@@ -3,7 +3,7 @@
 bash simulation.sh 
 bash runClient.sh 
 
-sleep 100
+sleep 15
 
 bash closeClient.sh
 bash stop.sh

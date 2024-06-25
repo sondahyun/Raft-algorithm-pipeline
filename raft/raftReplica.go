@@ -39,11 +39,12 @@ type Replica struct {
 	electionTimer *time.Timer // timeout for each view
 
 	// Persistent state on all servers
-	CurrentTerm types.View         // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
-	VotedFor    identity.NodeID    // 현재 term에서 투표한 candidate의 ID (없으면 null)
-	LogEntry    []message.Log      // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
-	VoteNum     map[types.View]int //vote 수
-	SuccessNum  map[types.View]int //ResponseAppendEntries 수
+	CurrentTerm types.View          // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
+	VotedFor    identity.NodeID     // 현재 term에서 투표한 candidate의 ID (없으면 null)
+	LogEntry    []message.Log       // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
+	VoteNum     map[types.View]int  // vote 정족수 확인
+	SuccessVote map[types.View]bool // vote 중복 확인
+	SuccessNum  map[int]int         // ResponseAppendEntries 정족수 확인
 	TotalNum    int
 
 	// Volatile state on all servers
@@ -112,7 +113,8 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.LastApplied = 0                        //state machine에 적용된 가장 높은 log entry의 index
 	r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
 	r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
-	r.SuccessNum = make(map[types.View]int)
+	r.SuccessNum = make(map[int]int)
+	r.SuccessVote = make(map[types.View]bool) // vote 중복 확인
 
 	r.Register(message.Transaction{}, r.handleTxn)
 	r.Register(message.Query{}, r.handleQuery)
@@ -480,101 +482,44 @@ func (r *Replica) Start() {
 			r.heartbeat.Reset(time.Duration(randomNumber) * time.Millisecond)
 			go r.hearbeatTMOtest()
 
+			if v.Entries.Command.Key == "" { //질문: heartbeat append entries수신후 responseAppendEntreis에 msg 보내야되는지
+				log.Debugf("[%v] follower가 empty RequestAppendEntries 처리 완료", r.ID())
+				continue
+			}
+
 			//Add AppendEntries (Entries != empty)
 			if v.Entries.Command.Key != "" {
 				r.table[v.Entries.Command.Key] = v.Entries.Command.Value
 
 				if v.Term < r.CurrentTerm {
-					//log.Debug("이상해씨")
 					continue
 				}
 				if v.Term > r.CurrentTerm {
 					r.CurrentTerm = v.Term
 				}
-
-				// // 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-				// if len(r.LogEntry) < v.PrevLogIndex || r.LogEntry[v.PrevLogIndex].Term != v.PrevLogTerm {
-				// 	log.Debugf("[%v]피카츄", r.ID())
-				// 	continue
-				// } //질문: LogEntry == PrevLogIndex ? 414도
-
-				// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
-				//Entries의 index
-				// 기존 항목이 새 항목과 충돌하는 경우(인덱스는 같지만 용어가 다른 경우), 기존 항목과 그 뒤에 오는 모든 항목을 삭제합니다.
-				if v.PrevLogIndex > 0 {
-					if r.LogEntry[v.PrevLogIndex+1].Term != v.Entries.Term {
-						r.LogEntry = r.LogEntry[:v.PrevLogIndex+1]
-						log.Debugf("[%v]기존 항목이 새 항목과 충돌", r.ID())
-					}
-				}
-
-				// // 4. Append any new entries not already in the log
-				// r.LogEntry[v.PrevLogIndex+1].Command = v.Entries[v.PrevLogIndex+1].Command
-				// r.LogEntry[v.PrevLogIndex+1].Term = v.Entries[v.PrevLogIndex+1].Term
-				// log.Debugf("[%v]피카츄2", r.ID())
-
-				// // 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-				// if v.LeaderCommit > r.CommitIndex {
-				// 	if v.LeaderCommit <= v.PrevLogIndex {
-				// 		r.CommitIndex = (v.LeaderCommit)
-				// 	}
-				// 	r.CommitIndex = (v.PrevLogIndex)
-				// }
-				// log.Debugf("[%v]피카츄3", r.ID())
-
-				// AddLog := message.Log{
-				// 	Command: message.Command{
-				// 		Key:   v.Key,
-				// 		Value: v.Value,
-				// 	},
-				// 	Term:  r.CurrentTerm,
-				// 	Index: 0, // 인덱스 1로 설정
-				// }
-
-				// r.LogEntry = append(r.LogEntry, AddLog)
-
-				// log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
-				// //log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
-				// // 원하는 형태로 LogEntry 배열 출력
-				// logEntriesStr := fmt.Sprintf("[%v] currentTerm: [%v], LogEntries[%d] ->", r.ID(), r.CurrentTerm, len(r.LogEntry)-1)
-				// for i, logEntry := range r.LogEntry {
-				// 	if i == 0 {
-				// 		continue
-				// 	}
-				// 	logEntriesStr += fmt.Sprintf(" [%s<=%d]", logEntry.Command.Key, logEntry.Command.Value)
-				// }
-				// log.Debugf(logEntriesStr)
-
+				r.CommitIndex = len(r.LogEntry) - 1
 				msg := message.ResponseAppendEntries{
-					Term:    r.CurrentTerm,
-					Success: true,
-					Entries: v.Entries,
+					Term:      r.CurrentTerm,
+					Success:   true,
+					Entries:   v.Entries,
+					LastIndex: len(r.LogEntry) - 1, //현재 LogEntry의 마지막 index
 				}
 				r.Send(identity.NodeID(v.LeaderID), msg)
 
 				log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료", r.ID())
 			}
-			if v.Entries.Command.Key == "" { //질문: heartbeat append entries수신후 responseAppendEntreis에 msg 보내야되는지
-				// msg := message.ResponseAppendEntries{
-				// 	Term:    r.CurrentTerm,
-				// 	Success: true,
-				// 	Entries: v.Entries,
-				// }
-				// r.Send(identity.NodeID(v.LeaderID), msg)
-
-				log.Debugf("[%v] follower가 empty RequestAppendEntries 처리 완료", r.ID())
-
-			}
 			log.Debugf("[%v] follower가 ResponseAppendEntries send", r.ID())
 
 		case message.ResponseAppendEntries: //leader
-			if v.Term > r.CurrentTerm {
-				r.CurrentTerm = v.Term
-			}
+
 			if v.Success {
-				r.SuccessNum[v.Term]++
+				r.SuccessNum[v.LastIndex]++
 			}
-			if r.SuccessNum[v.Term] <= r.TotalNum/2 { //모든 follower가 success하지 않으면 continue
+			if r.SuccessNum[v.LastIndex] <= r.TotalNum/2 { //정족수 만족
+				continue
+			}
+			if v.LastIndex == len(r.LogEntry)-1 {
+				log.Debugf("[%v] leader가 이미 append, broadcast 완료", r.ID())
 				continue
 			}
 			msg := message.CommitAppendEntries{
@@ -585,7 +530,7 @@ func (r *Replica) Start() {
 			r.LogEntry = append(r.LogEntry, v.Entries)
 			log.Debugf("[%v] leader가 LogRepli 정족수 확인 완료", r.ID())
 			log.Debugf("[%v] leader가 LogReplication 완료하고 CommitAppendEntreis broadcast", r.ID())
-
+			r.ProcessLog()
 			//leader가 commit
 			//client에 값 전달
 		case message.CommitAppendEntries:
@@ -640,13 +585,16 @@ func (r *Replica) Start() {
 			if v.VoteGranted {
 				r.VoteNum[v.Term]++
 			}
-			if r.VoteNum[v.Term] < r.TotalNum { //quorum 만족X
-				continue
-			}
-			// if r.VoteNum[v.Term] <= r.TotalNum/2 { //quorum 만족X
+			// if r.VoteNum[v.Term] < r.TotalNum { //quorum 만족X
 			// 	continue
 			// }
-
+			if r.VoteNum[v.Term] <= r.TotalNum/2 {
+				continue //quorum 만족X
+			}
+			if r.SuccessVote[v.Term] { // 중복 방지
+				continue
+			}
+			r.SuccessVote[v.Term] = true
 			log.Debugf("[%v] Receive ResponseVote, 정족수 확인 완료", r.ID())
 			log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
 
