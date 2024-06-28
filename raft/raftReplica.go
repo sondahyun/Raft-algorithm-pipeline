@@ -45,6 +45,7 @@ type Replica struct {
 	VoteNum     map[types.View]int  // vote 정족수 확인
 	SuccessVote map[types.View]bool // vote 중복 확인
 	SuccessNum  map[int]int         // ResponseAppendEntries 정족수 확인
+	SuccessBool map[int]bool        // ResponseAppendEntries 정족수 확인
 	TotalNum    int
 
 	// Volatile state on all servers
@@ -114,6 +115,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
 	r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
 	r.SuccessNum = make(map[int]int)
+	r.SuccessBool = make(map[int]bool)
 	r.SuccessVote = make(map[types.View]bool) // vote 중복 확인
 
 	r.Register(message.Transaction{}, r.handleTxn)
@@ -518,10 +520,16 @@ func (r *Replica) Start() {
 			if r.SuccessNum[v.LastIndex] <= r.TotalNum/2 { //정족수 만족
 				continue
 			}
-			if v.LastIndex == len(r.LogEntry)-1 {
+			if r.SuccessBool[v.LastIndex] {
 				log.Debugf("[%v] leader가 이미 append, broadcast 완료", r.ID())
 				continue
 			}
+			r.SuccessBool[v.LastIndex] = true
+
+			// if v.LastIndex == len(r.LogEntry)-2 {
+			// 	log.Debugf("[%v] leader가 이미 append, broadcast 완료", r.ID())
+			// 	continue
+			// }
 			msg := message.CommitAppendEntries{
 				Term:    r.CurrentTerm,
 				Entries: v.Entries,
