@@ -476,7 +476,7 @@ func (r *Replica) Start() {
 
 				randomNumber := rand.Intn(100) + 100
 				r.heartbeat = time.NewTimer(time.Duration(randomNumber) * time.Millisecond)
-				log.Debugf("[%v] randomNumber", randomNumber)
+				// log.Debugf("[%v] randomNumber", randomNumber)
 
 				go r.hearbeatTMOtest()
 			}
@@ -513,7 +513,7 @@ func (r *Replica) Start() {
 			log.Debugf("[%v] follower가 ResponseAppendEntries send", r.ID())
 
 		case message.ResponseAppendEntries: //leader
-
+			r.SuccessNum[v.LastIndex]++
 			if v.Success {
 				r.SuccessNum[v.LastIndex]++
 			}
@@ -538,6 +538,14 @@ func (r *Replica) Start() {
 			r.LogEntry = append(r.LogEntry, v.Entries)
 			log.Debugf("[%v] leader가 LogRepli 정족수 확인 완료", r.ID())
 			log.Debugf("[%v] leader가 LogReplication 완료하고 CommitAppendEntreis broadcast", r.ID())
+			logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] ->", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
+			for i, logEntry := range r.LogEntry {
+				if i == 0 {
+					continue
+				}
+				logEntriesStr += fmt.Sprintf(" [%s<=%d]", logEntry.Command.Key, logEntry.Command.Value)
+			}
+			log.Debugf(logEntriesStr)
 			r.ProcessLog()
 			//leader가 commit
 			//client에 값 전달

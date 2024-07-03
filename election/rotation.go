@@ -29,15 +29,13 @@ func NewRotation(peerNo int) *Rotation {
 
 func (r *Rotation) IsLeader(id identity.NodeID, view types.View) bool {
 	if view <= 3 {
-		if id.Node() < r.peerNo {
-			return false
-		}
-		return true
+		return id.Node() >= r.peerNo
 	}
 	h := sha1.New()
 	h.Write([]byte(strconv.Itoa(int(view) + 1)))
 	bs := h.Sum(nil)
 	data := binary.BigEndian.Uint64(bs)
+	
 	return data%uint64(r.peerNo) == uint64(id.Node()-1)
 }
 
