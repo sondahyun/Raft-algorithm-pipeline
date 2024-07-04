@@ -16,6 +16,7 @@ func NewProducer() *Producer {
 }
 
 func (pd *Producer) GeneratePayload() []*message.Transaction {
+	// pd.mempool에서 config.Configuration.BSize 크기만큼의 트랜잭션을 가져옴
 	return pd.mempool.some(config.Configuration.BSize)
 }
 

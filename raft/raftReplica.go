@@ -53,8 +53,8 @@ type Replica struct {
 	LastApplied int // 상태 머신에 적용된 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
 
 	// Volatile state on leaders
-	NextIndex  map[message.Log]int // 각 서버에 보낼 다음 로그 엔트리의 인덱스 (초기값 리더의 마지막 로그 인덱스 + 1)
-	MatchIndex map[message.Log]int // 각 서버에 복제된 것으로 알려진 최고 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
+	// NextIndex  map[message.Log]int // 각 서버에 보낼 다음 로그 엔트리의 인덱스 (초기값 리더의 마지막 로그 인덱스 + 1)
+	// MatchIndex map[message.Log]int // 각 서버에 복제된 것으로 알려진 최고 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
 
 	committedBlocks chan *blockchain.Block
 	forkedBlocks    chan *blockchain.Block
@@ -109,11 +109,11 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.VotedFor = "" // 빈 문자열로 초기화
 	r.VoteNum = make(map[types.View]int)
 	r.TotalNum = config.GetConfig().N()
-	r.LogEntry = []message.Log{{}}           // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
-	r.CommitIndex = 0                        //커밋되어 있는 가장 높은 log entry의 index
-	r.LastApplied = 0                        //state machine에 적용된 가장 높은 log entry의 index
-	r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
-	r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
+	r.LogEntry = []message.Log{{}} // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
+	r.CommitIndex = 0              //커밋되어 있는 가장 높은 log entry의 index
+	r.LastApplied = 0              //state machine에 적용된 가장 높은 log entry의 index
+	// r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
+	// r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
 	r.SuccessNum = make(map[int]int)
 	r.SuccessBool = make(map[int]bool)
 	r.SuccessVote = make(map[types.View]bool) // vote 중복 확인
@@ -279,22 +279,26 @@ func (r *Replica) proposeBlock(view types.View) {
 
 func (r *Replica) ProcessLog() { //leader
 
-	txs := r.pd.GeneratePayload()
-	tx := txs[0]
+	txs := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
 
-	AddLog := message.Log{
-		Command: &message.Command{
-			Key:   tx.Key,
-			Value: tx.Value,
-		},
-		Term: r.CurrentTerm,
+	// 슬라이스의 첫 번째 트랜잭션을 가져옴
+	cmds := make([]*message.Command, 0)
+	for i := 0; i < len(txs); i++ {
+		tx := txs[i]
+		// log.Debugf("len(txs):[%v]", len(txs))
+		cmds = append(cmds, &message.Command{Key: tx.Key, Value: tx.Value})
 	}
+	addLog := message.Log{
+		Command: cmds,
+		Term:    r.CurrentTerm,
+	}
+
 	msg := message.RequestAppendEntries{
 		Term:         r.CurrentTerm,
 		LeaderID:     r.ID(),
 		PrevLogIndex: len(r.LogEntry) - 1,
 		PrevLogTerm:  r.CurrentTerm - 1,
-		Entries:      AddLog,
+		Entries:      addLog,
 		LeaderCommit: 0,
 	}
 
@@ -409,12 +413,11 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 
 		<-r.heartbeat.C
 
+		// cmds := make([]*message.Command, 0)
+		// cmds = append(cmds, &message.Command{Key: "", Value: 0})
 		AddLog := message.Log{
-			Command: &message.Command{
-				Key:   "",
-				Value: 0,
-			},
-			Term: r.CurrentTerm,
+			Command: nil,
+			Term:    r.CurrentTerm,
 		}
 		log.Debugf("[%v]leader send RequestAppendEntries", r.ID())
 		msg := message.RequestAppendEntries{
@@ -484,14 +487,15 @@ func (r *Replica) Start() {
 			r.heartbeat.Reset(time.Duration(randomNumber) * time.Millisecond)
 			go r.hearbeatTMOtest()
 
-			if v.Entries.Command.Key == "" { //질문: heartbeat append entries수신후 responseAppendEntreis에 msg 보내야되는지
+			if v.Entries.Command == nil { //질문: heartbeat append entries수신후 responseAppendEntreis에 msg 보내야되는지
 				log.Debugf("[%v] follower가 empty RequestAppendEntries 처리 완료", r.ID())
+
 				continue
 			}
 
 			//Add AppendEntries (Entries != empty)
-			if v.Entries.Command.Key != "" {
-				r.table[v.Entries.Command.Key] = v.Entries.Command.Value
+			for i := 0; i < len(v.Entries.Command); i++ {
+				r.table[v.Entries.Command[i].Key] = v.Entries.Command[i].Value
 
 				if v.Term < r.CurrentTerm {
 					continue
@@ -500,17 +504,19 @@ func (r *Replica) Start() {
 					r.CurrentTerm = v.Term
 				}
 				r.CommitIndex = len(r.LogEntry) - 1
-				msg := message.ResponseAppendEntries{
-					Term:      r.CurrentTerm,
-					Success:   true,
-					Entries:   v.Entries,
-					LastIndex: len(r.LogEntry) - 1, //현재 LogEntry의 마지막 index
-				}
-				r.Send(identity.NodeID(v.LeaderID), msg)
-
-				log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료", r.ID())
 			}
-			log.Debugf("[%v] follower가 ResponseAppendEntries send", r.ID())
+			msg := message.ResponseAppendEntries{
+				Term:      r.CurrentTerm,
+				Success:   true,
+				Entries:   v.Entries,
+				LastIndex: len(r.LogEntry) - 1, //현재 LogEntry의 마지막 index
+
+			}
+			r.Send(identity.NodeID(v.LeaderID), msg)
+
+			log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료 | LastIndex: %v", r.ID(), len(r.LogEntry)-1)
+
+			log.Debugf("[%v] follower가 ResponseAppendEntries send | LastIndex: %v", r.ID(), len(r.LogEntry)-1)
 
 		case message.ResponseAppendEntries: //leader
 			r.SuccessNum[v.LastIndex]++
@@ -522,6 +528,7 @@ func (r *Replica) Start() {
 			}
 			if r.SuccessBool[v.LastIndex] {
 				log.Debugf("[%v] leader가 이미 append, broadcast 완료", r.ID())
+
 				continue
 			}
 			r.SuccessBool[v.LastIndex] = true
@@ -543,8 +550,12 @@ func (r *Replica) Start() {
 				if i == 0 {
 					continue
 				}
-				logEntriesStr += fmt.Sprintf(" [%s<=%d]", logEntry.Command.Key, logEntry.Command.Value)
+				for i := 0; i < len(v.Entries.Command); i++ {
+					logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
+				}
+				logEntriesStr += " | "
 			}
+
 			log.Debugf(logEntriesStr)
 			r.ProcessLog()
 			//leader가 commit
@@ -557,13 +568,17 @@ func (r *Replica) Start() {
 			//log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
 			//log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
 			// 원하는 형태로 LogEntry 배열 출력
-			logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] ->", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
+			logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] -> ", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
 			for i, logEntry := range r.LogEntry {
 				if i == 0 {
 					continue
 				}
-				logEntriesStr += fmt.Sprintf(" [%s<=%d]", logEntry.Command.Key, logEntry.Command.Value)
+				for i := 0; i < len(v.Entries.Command); i++ {
+					logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
+				}
+				logEntriesStr += " | "
 			}
+			//logEntriesStr += fmt.Sprintf("| ")
 			log.Debugf(logEntriesStr)
 
 		case message.RequestVote:

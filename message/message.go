@@ -116,7 +116,7 @@ type Command struct {
 }
 
 type Log struct {
-	Command *Command   // 상태 머신에 적용될 명령
+	Command []*Command // 상태 머신에 적용될 명령
 	Term    types.View // 수신된 term 번호
 }
 
