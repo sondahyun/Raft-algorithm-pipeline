@@ -39,14 +39,15 @@ type Replica struct {
 	electionTimer *time.Timer // timeout for each view
 
 	// Persistent state on all servers
-	CurrentTerm types.View          // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
-	VotedFor    identity.NodeID     // 현재 term에서 투표한 candidate의 ID (없으면 null)
-	LogEntry    []message.Log       // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
-	VoteNum     map[types.View]int  // vote 정족수 확인
-	SuccessVote map[types.View]bool // vote 중복 확인
-	SuccessNum  map[int]int         // ResponseAppendEntries 정족수 확인
-	SuccessBool map[int]bool        // ResponseAppendEntries 정족수 확인
-	TotalNum    int
+	CurrentTerm    types.View          // 서버가 경험한 최신 term 번호 (초기값 0, 단조 증가)
+	VotedFor       identity.NodeID     // 현재 term에서 투표한 candidate의 ID (없으면 null)
+	LogEntry       []message.Log       // 로그 엔트리들; 각 엔트리에는 상태 머신의 명령과 수신된 term 번호 포함 (첫 인덱스는 1)
+	VoteNum        map[types.View]int  // vote 정족수 확인
+	SuccessVote    map[types.View]bool // vote 중복 확인
+	SuccessNum     map[int]int         // ResponseAppendEntries 정족수 확인
+	SuccessBool    map[int]bool        // ResponseAppendEntries 정족수 확인
+	TotalNum       int
+	TransactionNum int
 
 	// Volatile state on all servers
 	CommitIndex int // 커밋된 것으로 알려진 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
@@ -112,6 +113,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.LogEntry = []message.Log{{}} // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
 	r.CommitIndex = 0              //커밋되어 있는 가장 높은 log entry의 index
 	r.LastApplied = 0              //state machine에 적용된 가장 높은 log entry의 index
+	r.TransactionNum = 0
 	// r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
 	// r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
 	r.SuccessNum = make(map[int]int)
@@ -278,16 +280,24 @@ func (r *Replica) proposeBlock(view types.View) {
 }
 
 func (r *Replica) ProcessLog() { //leader
+	//ThroughputStart := time.Now()
 
 	txs := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
 
 	// 슬라이스의 첫 번째 트랜잭션을 가져옴
 	cmds := make([]*message.Command, 0)
+	// TransactionNum := len(txs)
 	for i := 0; i < len(txs); i++ {
 		tx := txs[i]
 		// log.Debugf("len(txs):[%v]", len(txs))
-		cmds = append(cmds, &message.Command{Key: tx.Key, Value: tx.Value})
+		cmds = append(cmds, &message.Command{
+			Key:       tx.Key,
+			Value:     tx.Value,
+			Txsn:      len(txs),
+			Timestamp: time.Now(),
+		})
 	}
+
 	addLog := message.Log{
 		Command: cmds,
 		Term:    r.CurrentTerm,
@@ -303,7 +313,7 @@ func (r *Replica) ProcessLog() { //leader
 	}
 
 	r.Broadcast(msg)
-
+	//r.ProcessLog() //pipeline
 	log.Debugf("[%v] Leader Broadcast Real RequestAppendEntries", r.ID())
 
 }
@@ -469,6 +479,7 @@ func (r *Replica) Start() {
 		case pacemaker.TMO:
 			// r.RaftSafety.ProcessRemoteTmo(&v)
 		case message.RequestAppendEntries: //Follwer
+
 			//r.RaftSafety.ProcessRequestAppendEntries(&v)
 			//heartbeat reset
 			// HeartBeat 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
@@ -483,11 +494,12 @@ func (r *Replica) Start() {
 
 				go r.hearbeatTMOtest()
 			}
-			randomNumber := rand.Intn(100) + 100
-			r.heartbeat.Reset(time.Duration(randomNumber) * time.Millisecond)
-			go r.hearbeatTMOtest()
 
-			if v.Entries.Command == nil { //질문: heartbeat append entries수신후 responseAppendEntreis에 msg 보내야되는지
+			randomNumber := rand.Intn(100) + 100 // 수정
+			r.heartbeat.Reset(time.Duration(randomNumber) * time.Millisecond)
+			//go r.hearbeatTMOtest()
+
+			if v.Entries.Command == nil {
 				log.Debugf("[%v] follower가 empty RequestAppendEntries 처리 완료", r.ID())
 
 				continue
@@ -512,6 +524,7 @@ func (r *Replica) Start() {
 				LastIndex: len(r.LogEntry) - 1, //현재 LogEntry의 마지막 index
 
 			}
+			//r.FindLeaderFor(r.CurrentTerm)
 			r.Send(identity.NodeID(v.LeaderID), msg)
 
 			log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료 | LastIndex: %v", r.ID(), len(r.LogEntry)-1)
@@ -519,6 +532,7 @@ func (r *Replica) Start() {
 			log.Debugf("[%v] follower가 ResponseAppendEntries send | LastIndex: %v", r.ID(), len(r.LogEntry)-1)
 
 		case message.ResponseAppendEntries: //leader
+
 			r.SuccessNum[v.LastIndex]++
 			if v.Success {
 				r.SuccessNum[v.LastIndex]++
@@ -533,18 +547,26 @@ func (r *Replica) Start() {
 			}
 			r.SuccessBool[v.LastIndex] = true
 
-			// if v.LastIndex == len(r.LogEntry)-2 {
-			// 	log.Debugf("[%v] leader가 이미 append, broadcast 완료", r.ID())
-			// 	continue
+			// for _, tx := range v.Entries.Command {
+			// 	fmt.Println("throughput: ", time.Since(tx.Timestamp))
 			// }
+			// fmt.Println()
+
+			if v.LastIndex == len(r.LogEntry)-2 {
+				log.Debugf("[%v] leader가 이미 append, broadcast 완료", r.ID())
+
+				continue
+			}
 			msg := message.CommitAppendEntries{
 				Term:    r.CurrentTerm,
 				Entries: v.Entries,
 			}
 			r.Broadcast(msg)
 			r.LogEntry = append(r.LogEntry, v.Entries)
+
 			log.Debugf("[%v] leader가 LogRepli 정족수 확인 완료", r.ID())
 			log.Debugf("[%v] leader가 LogReplication 완료하고 CommitAppendEntreis broadcast", r.ID())
+
 			logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] ->", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
 			for i, logEntry := range r.LogEntry {
 				if i == 0 {
@@ -557,11 +579,21 @@ func (r *Replica) Start() {
 			}
 
 			log.Debugf(logEntriesStr)
+
+			for _, tx := range v.Entries.Command { //latency
+				fmt.Printf("latency: %v \n", time.Since(tx.Timestamp))
+			}
+			for _, tx := range v.Entries.Command { //tps
+				fmt.Printf("tps: %v \n", float64(tx.Txsn)/float64(time.Since(tx.Timestamp).Seconds()))
+			}
+			fmt.Printf
 			r.ProcessLog()
 			//leader가 commit
 			//client에 값 전달
 		case message.CommitAppendEntries:
 			r.LogEntry = append(r.LogEntry, v.Entries)
+
+			fmt.Println()
 			log.Debugf("[%v]가 CommitAppendEntries 처리 완료", r.ID())
 			log.Debugf("[%v] follower가 LogReplication 완료", r.ID())
 
@@ -580,6 +612,8 @@ func (r *Replica) Start() {
 			}
 			//logEntriesStr += fmt.Sprintf("| ")
 			log.Debugf(logEntriesStr)
+
+			r.TransactionNum++
 
 		case message.RequestVote:
 			log.Debugf("[%v]가 ReqeustVote받음", r.ID())
@@ -630,6 +664,7 @@ func (r *Replica) Start() {
 			log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
 
 			r.SetState(types.LEADER)
+			r.SetLeader(r.ID(), r.CurrentTerm)
 			log.Debugf("[%v]가 leader", r.ID())
 
 			go r.startHeartbeatTimer()

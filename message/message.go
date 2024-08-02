@@ -111,8 +111,10 @@ type Register struct {
  *     Raft Related     *
  ************************/
 type Command struct {
-	Key   string
-	Value int
+	Key       string
+	Value     int
+	Txsn      int
+	Timestamp time.Time
 }
 
 type Log struct {

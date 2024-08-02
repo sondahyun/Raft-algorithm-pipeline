@@ -61,7 +61,7 @@ func (b *Backend) front() *message.Transaction {
 		return nil
 	}
 	b.txns.Remove(ele)
-	return val
+	return val 
 }
 
 func (b *Backend) some(n int) []*message.Transaction {

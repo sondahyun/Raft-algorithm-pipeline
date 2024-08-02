@@ -6,6 +6,7 @@ import (
 )
 
 type Election interface {
+	SetLeader(id identity.NodeID, view types.View)
 	IsLeader(id identity.NodeID, view types.View) bool
 	FindLeaderFor(view types.View) identity.NodeID
 	// StartElection()

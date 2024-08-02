@@ -200,9 +200,9 @@ func (c *Config) Load() {
 	i := 1
 	for scanner.Scan() {
 		id := identity.NewNodeID(i)
-		port := strconv.Itoa(3734 + i)
+		port := strconv.Itoa(8999 + i)
 		addr := "tcp://" + scanner.Text() + ":" + port
-		portHttp := strconv.Itoa(8069 + i)
+		portHttp := strconv.Itoa(9999 + i)
 		addrHttp := "http://" + scanner.Text() + ":" + portHttp
 		c.Addrs[id] = addr
 		c.HTTPAddrs[id] = addrHttp

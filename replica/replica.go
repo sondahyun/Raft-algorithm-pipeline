@@ -70,9 +70,9 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 		log.Infof("[%v] is Byzantine", r.ID())
 	}
 	if config.GetConfig().Master == "0" {
-		r.Election = election.NewRotation(config.GetConfig().N())
+		// r.Election = election.NewRotation(config.GetConfig().N())//
 	} else {
-		r.Election = election.NewStatic(config.GetConfig().Master)
+		// r.Election = election.NewStatic(config.GetConfig().Master)
 	}
 	r.isByz = isByz
 	r.pd = mempool.NewProducer()
