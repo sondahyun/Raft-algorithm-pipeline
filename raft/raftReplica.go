@@ -586,7 +586,7 @@ func (r *Replica) Start() {
 			for _, tx := range v.Entries.Command { //tps
 				fmt.Printf("tps: %v \n", float64(tx.Txsn)/float64(time.Since(tx.Timestamp).Seconds()))
 			}
-			fmt.Printf
+			//fmt.Printf("트랜잭션 수: %v", len(v.Entries.Command.Txsn))
 			r.ProcessLog()
 			//leader가 commit
 			//client에 값 전달
