@@ -48,6 +48,10 @@ type Replica struct {
 	SuccessBool    map[int]bool        // ResponseAppendEntries 정족수 확인
 	TotalNum       int
 	TransactionNum int
+	LatencySum     time.Duration
+	LatencyNum     time.Duration
+	TpsSum         float64
+	TpsNum         float64
 
 	// Volatile state on all servers
 	CommitIndex int // 커밋된 것으로 알려진 가장 높은 로그 엔트리의 인덱스 (초기값 0, 단조 증가)
@@ -114,6 +118,8 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.CommitIndex = 0              //커밋되어 있는 가장 높은 log entry의 index
 	r.LastApplied = 0              //state machine에 적용된 가장 높은 log entry의 index
 	r.TransactionNum = 0
+	r.TpsSum = 0
+	r.TpsNum = 0
 	// r.NextIndex = make(map[message.Log]int)  // make 함수로 초기화
 	// r.MatchIndex = make(map[message.Log]int) // make 함수로 초기화
 	r.SuccessNum = make(map[int]int)
@@ -567,26 +573,33 @@ func (r *Replica) Start() {
 			log.Debugf("[%v] leader가 LogRepli 정족수 확인 완료", r.ID())
 			log.Debugf("[%v] leader가 LogReplication 완료하고 CommitAppendEntreis broadcast", r.ID())
 
-			logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] ->", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
-			for i, logEntry := range r.LogEntry {
-				if i == 0 {
-					continue
-				}
-				for i := 0; i < len(v.Entries.Command); i++ {
-					logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
-				}
-				logEntriesStr += " | "
-			}
+			//logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] ->", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
+			// for j, logEntry := range r.LogEntry {
+			// 	if j == 0 {
+			// 		continue
+			// 	}
+			// 	for i := 0; i < len(v.Entries.Command); i++ {
+			// 		logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
+			// 	}
+			// 	logEntriesStr += " | "
+			// }
 
-			log.Debugf(logEntriesStr)
-
+			//log.Debugf(logEntriesStr)
+			r.LatencySum = 0
+			r.TpsSum = 0
 			for _, tx := range v.Entries.Command { //latency
-				fmt.Printf("latency: %v \n", time.Since(tx.Timestamp))
+				r.LatencyNum = time.Since(tx.Timestamp)
+				r.LatencySum += r.LatencyNum
+				fmt.Printf("latency: %v \n", r.LatencyNum)
 			}
 			for _, tx := range v.Entries.Command { //tps
-				fmt.Printf("tps: %v \n", float64(tx.Txsn)/float64(time.Since(tx.Timestamp).Seconds()))
+				r.TpsNum = float64(tx.Txsn) / float64(time.Since(tx.Timestamp).Seconds())
+				r.TpsSum += r.TpsNum
+				fmt.Printf("tps: %v \n", r.TpsNum)
 			}
-			//fmt.Printf("트랜잭션 수: %v", len(v.Entries.Command.Txsn))
+			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
+			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
+			fmt.Printf("트랜잭션 수: %v \n", len(v.Entries.Command))
 			r.ProcessLog()
 			//leader가 commit
 			//client에 값 전달
@@ -600,18 +613,18 @@ func (r *Replica) Start() {
 			//log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
 			//log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
 			// 원하는 형태로 LogEntry 배열 출력
-			logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] -> ", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
-			for i, logEntry := range r.LogEntry {
-				if i == 0 {
-					continue
-				}
-				for i := 0; i < len(v.Entries.Command); i++ {
-					logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
-				}
-				logEntriesStr += " | "
-			}
+			//logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] -> ", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
+			// for j, logEntry := range r.LogEntry {
+			// 	if j == 0 {
+			// 		continue
+			// 	}
+			// 	for i := 0; i < len(v.Entries.Command); i++ {
+			// 		logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
+			// 	}
+			// 	logEntriesStr += " | "
+			// }
 			//logEntriesStr += fmt.Sprintf("| ")
-			log.Debugf(logEntriesStr)
+			//log.Debugf(logEntriesStr)
 
 			r.TransactionNum++
 
