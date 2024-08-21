@@ -285,45 +285,6 @@ func (r *Replica) proposeBlock(view types.View) {
 	r.voteStart = time.Now()
 }
 
-func (r *Replica) ProcessLog() { //leader
-	//ThroughputStart := time.Now()
-
-	txs := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
-
-	// 슬라이스의 첫 번째 트랜잭션을 가져옴
-	cmds := make([]*message.Command, 0)
-	// TransactionNum := len(txs)
-	for i := 0; i < len(txs); i++ {
-		tx := txs[i]
-		// log.Debugf("len(txs):[%v]", len(txs))
-		cmds = append(cmds, &message.Command{
-			Key:       tx.Key,
-			Value:     tx.Value,
-			Txsn:      len(txs),
-			Timestamp: time.Now(),
-		})
-	}
-
-	addLog := message.Log{
-		Command: cmds,
-		Term:    r.CurrentTerm,
-	}
-
-	msg := message.RequestAppendEntries{
-		Term:         r.CurrentTerm,
-		LeaderID:     r.ID(),
-		PrevLogIndex: len(r.LogEntry) - 1,
-		PrevLogTerm:  r.CurrentTerm - 1,
-		Entries:      addLog,
-		LeaderCommit: 0,
-	}
-
-	r.Broadcast(msg)
-	//r.ProcessLog() //pipeline
-	log.Debugf("[%v] Leader Broadcast Real RequestAppendEntries", r.ID())
-
-}
-
 // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 func (r *Replica) ListenCommittedBlocks() {
 	for {
@@ -465,6 +426,45 @@ func (r *Replica) hearbeatTMOtest() {
 	// }
 }
 
+func (r *Replica) ProcessLog() { //leader
+	//ThroughputStart := time.Now()
+
+	txs := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
+
+	// 슬라이스의 첫 번째 트랜잭션을 가져옴
+	cmds := make([]*message.Command, 0)
+	// TransactionNum := len(txs)
+	for i := 0; i < len(txs); i++ {
+		tx := txs[i]
+		// log.Debugf("len(txs):[%v]", len(txs))
+		cmds = append(cmds, &message.Command{
+			Key:       tx.Key,
+			Value:     tx.Value,
+			Txsn:      len(txs),
+			Timestamp: time.Now(),
+		})
+	}
+
+	addLog := message.Log{
+		Command: cmds,
+		Term:    r.CurrentTerm,
+	}
+
+	msg := message.RequestAppendEntries{
+		Term:         r.CurrentTerm,
+		LeaderID:     r.ID(),
+		PrevLogIndex: len(r.LogEntry) - 1,
+		PrevLogTerm:  r.CurrentTerm - 1,
+		Entries:      addLog,
+		LeaderCommit: 0,
+	}
+
+	r.Broadcast(msg)
+	//r.ProcessLog() //pipeline
+	log.Debugf("[%v] Leader Broadcast Real RequestAppendEntries", r.ID())
+
+}
+
 // Start starts event loop
 func (r *Replica) Start() {
 	go r.Run()
@@ -599,7 +599,7 @@ func (r *Replica) Start() {
 			}
 			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
 			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
-			fmt.Printf("트랜잭션 수: %v \n", len(v.Entries.Command))
+			fmt.Printf("트랜잭션 수: %v \n\n", len(v.Entries.Command))
 			r.ProcessLog()
 			//leader가 commit
 			//client에 값 전달
