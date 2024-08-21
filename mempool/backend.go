@@ -62,6 +62,7 @@ func (b *Backend) front() *message.Transaction {
 		return nil
 	}
 	b.txns.Remove(ele)
+
 	return val
 }
 
@@ -72,12 +73,12 @@ func (b *Backend) some(n int) []*message.Transaction {
 	defer b.mu.Unlock()
 	batchSize = b.size() // 현재 Backend에 있는 트랜잭션의 수를 batchSize에 저장
 
-	fmt.Printf("total Txn: [%v], n: [%v]", batchSize, n)
+	fmt.Printf("total Txn: [%v], n: [%v]\n", batchSize, n)
 
 	if batchSize >= n { // 요청된 트랜잭션 수(n)보다 batchSize가 크거나 같으면, batchSize를 n으로 설정
 		batchSize = n
 	} else if batchSize < n {
-		fmt.Printf("txn 부족")
+		fmt.Printf("txn 부족\n\n")
 	}
 
 	batch := make([]*message.Transaction, 0, batchSize) // batchSize 크기의 슬라이스를 초기화

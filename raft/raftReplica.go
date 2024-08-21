@@ -392,7 +392,7 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 
 		// cmds := make([]*message.Command, 0)
 		// cmds = append(cmds, &message.Command{Key: "", Value: 0})
-		AddLog := message.Log{
+		addLog := message.Log{
 			Command: nil,
 			Term:    r.CurrentTerm,
 		}
@@ -402,7 +402,7 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 			LeaderID:     r.ID(),
 			PrevLogIndex: 0,
 			PrevLogTerm:  r.CurrentTerm,
-			Entries:      AddLog,
+			Entries:      addLog,
 			LeaderCommit: 0,
 		}
 		r.Broadcast(msg)
@@ -429,18 +429,18 @@ func (r *Replica) hearbeatTMOtest() {
 func (r *Replica) ProcessLog() { //leader
 	//ThroughputStart := time.Now()
 
-	txs := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
+	batch := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
 
 	// 슬라이스의 첫 번째 트랜잭션을 가져옴
 	cmds := make([]*message.Command, 0)
 	// TransactionNum := len(txs)
-	for i := 0; i < len(txs); i++ {
-		tx := txs[i]
+	for i := 0; i < len(batch); i++ {
+		tx := batch[i]
 		// log.Debugf("len(txs):[%v]", len(txs))
 		cmds = append(cmds, &message.Command{
 			Key:       tx.Key,
 			Value:     tx.Value,
-			Txsn:      len(txs),
+			Txsn:      len(batch),
 			Timestamp: time.Now(),
 		})
 	}
@@ -681,7 +681,7 @@ func (r *Replica) Start() {
 			log.Debugf("[%v]가 leader", r.ID())
 
 			go r.startHeartbeatTimer()
-			r.ProcessLog()
+			go r.ProcessLog()
 
 			// 클라이언트로 부터 받은 값으로 합의 시작
 			//r.RaftSafety.ProcessResponseVote(&v)
