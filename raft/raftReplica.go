@@ -401,7 +401,7 @@ func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontim
 			Term:         r.CurrentTerm,
 			LeaderID:     r.ID(),
 			PrevLogIndex: 0,
-			PrevLogTerm:  r.CurrentTerm,
+			//PrevLogTerm:  r.CurrentTerm,
 			Entries:      addLog,
 			LeaderCommit: 0,
 		}
@@ -425,6 +425,8 @@ func (r *Replica) hearbeatTMOtest() {
 	// 	}
 	// }
 }
+
+var globalIndex int = 0
 
 func (r *Replica) ProcessLog() { //leader
 	//ThroughputStart := time.Now()
@@ -454,13 +456,14 @@ func (r *Replica) ProcessLog() { //leader
 		Term:         r.CurrentTerm,
 		LeaderID:     r.ID(),
 		PrevLogIndex: len(r.LogEntry) - 1,
-		PrevLogTerm:  r.CurrentTerm - 1,
-		Entries:      addLog,
+		// PrevLogTerm:  r.CurrentTerm - 1,
+		Entries:      addLog, // txn batch
+		Index:        globalIndex,
 		LeaderCommit: 0,
 	}
 
 	r.Broadcast(msg)
-	//r.ProcessLog() //pipeline
+	// r.ProcessLog() //pipeline
 	log.Debugf("[%v] Leader Broadcast Real RequestAppendEntries", r.ID())
 
 }
@@ -485,9 +488,7 @@ func (r *Replica) Start() {
 		case pacemaker.TMO:
 			// r.RaftSafety.ProcessRemoteTmo(&v)
 		case message.RequestAppendEntries: //Follwer
-
-			//r.RaftSafety.ProcessRequestAppendEntries(&v)
-			//heartbeat reset
+			// heartbeat reset
 			// HeartBeat 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
 			log.Debugf("[%v] follower가 RequestAppendEntries 받음", r.ID())
 
@@ -600,9 +601,9 @@ func (r *Replica) Start() {
 			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
 			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
 			fmt.Printf("트랜잭션 수: %v \n\n", len(v.Entries.Command))
-			r.ProcessLog()
 			//leader가 commit
 			//client에 값 전달
+
 		case message.CommitAppendEntries:
 			r.LogEntry = append(r.LogEntry, v.Entries)
 
