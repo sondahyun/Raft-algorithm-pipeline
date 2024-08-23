@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -70,11 +71,10 @@ func (r *Raft) ProcessBlock(block *blockchain.Block) error {
 		return nil
 	}
 
-	if block.QC != nil {
-		r.updateHighQC(block.QC)
-	} else {
-		return fmt.Errorf("the block should contain a QC")
+	if block.QC == nil {
+		return errors.New("the block should contain a QC")
 	}
+	r.updateHighQC(block.QC)
 
 	// does not have to process the QC if the replica is the proposer
 	if block.Proposer != r.ID() {
@@ -104,12 +104,14 @@ func (r *Raft) ProcessBlock(block *blockchain.Block) error {
 	shouldVote, err := r.votingRule(block)
 
 	if err != nil {
-		log.Errorf("[%v] cannot decide whether to vote the block, %w", r.ID(), err)
+		log.Errorf("[%v] cannot decide whether to vote the block: %v", r.ID(), err)
+
 		return err
 	}
 
 	if !shouldVote {
 		log.Debugf("[%v] is not going to vote for block, id: %x", r.ID(), block.ID)
+
 		return nil
 	}
 
@@ -150,7 +152,7 @@ func (r *Raft) ProcessVote(vote *blockchain.Vote) {
 	isBuilt, qc := r.bc.AddVote(vote)
 	if !isBuilt {
 		log.Debugf("[%v] not sufficient votes to build a QC, block id: %x", r.ID(), vote.BlockID)
-		
+
 		return
 	}
 	qc.Leader = r.ID()
@@ -158,6 +160,7 @@ func (r *Raft) ProcessVote(vote *blockchain.Vote) {
 	_, err := r.bc.GetBlockByID(qc.BlockID)
 	if err != nil {
 		r.bufferedQCs[qc.BlockID] = qc
+
 		return
 	}
 	r.processCertificate(qc)
@@ -188,6 +191,7 @@ func (r *Raft) ProcessLocalTmo(view types.View) {
 func (r *Raft) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
 	qc := r.forkChoice()
 	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, r.ID())
+
 	return block
 }
 
@@ -200,7 +204,7 @@ func (r *Raft) forkChoice() *blockchain.QC {
 	parBlockID := r.GetHighQC().BlockID
 	parBlock, err := r.bc.GetBlockByID(parBlockID)
 	if err != nil {
-		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
+		log.Warningf("cannot get parent block of block id: %x: %v", parBlockID, err)
 	}
 	if parBlock.QC.View < r.preferredView {
 		choice = r.GetHighQC()
@@ -209,6 +213,7 @@ func (r *Raft) forkChoice() *blockchain.QC {
 	}
 	// to simulate TC's view
 	choice.View = r.pm.GetCurView() - 1
+
 	return choice
 }
 
@@ -222,12 +227,14 @@ func (r *Raft) processTC(tc *pacemaker.TC) {
 func (r *Raft) GetHighQC() *blockchain.QC {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return r.highQC
 }
 
 func (r *Raft) GetChainStatus() string {
 	chainGrowthRate := r.bc.GetChainGrowth()
 	blockIntervals := r.bc.GetBlockIntervals()
+
 	return fmt.Sprintf("[%v] The current view is: %v, chain growth rate is: %v, ave block interval is: %v", r.ID(), r.pm.GetCurView(), chainGrowthRate, blockIntervals)
 }
 
@@ -246,19 +253,22 @@ func (r *Raft) processCertificate(qc *blockchain.QC) {
 	}
 	if qc.Leader != r.ID() {
 		quorumIsVerified, _ := crypto.VerifyQuorumSignature(qc.AggSig, qc.BlockID, qc.Signers)
-		if quorumIsVerified == false {
+		if !quorumIsVerified {
 			log.Warningf("[%v] received a quorum with invalid signatures", r.ID())
+
 			return
 		}
 	}
 	if r.IsByz() && config.GetConfig().Strategy == FORK && r.IsLeader(r.ID(), qc.View+1) {
 		r.pm.AdvanceView(qc.View)
+
 		return
 	}
 	err := r.updatePreferredView(qc)
 	if err != nil {
 		r.bufferedQCs[qc.BlockID] = qc
 		log.Debugf("[%v] a qc is buffered, view: %v, id: %x", r.ID(), qc.View, qc.BlockID)
+
 		return
 	}
 	r.pm.AdvanceView(qc.View)
@@ -273,7 +283,8 @@ func (r *Raft) processCertificate(qc *blockchain.QC) {
 	// forked blocks are found when pruning
 	committedBlocks, forkedBlocks, err := r.bc.CommitBlock(block.ID, r.pm.GetCurView())
 	if err != nil {
-		log.Errorf("[%v] cannot commit blocks, %w", r.ID(), err)
+		log.Errorf("[%v] cannot commit blocks, %v", r.ID(), err)
+
 		return
 	}
 	for _, cBlock := range committedBlocks {
@@ -295,6 +306,7 @@ func (r *Raft) votingRule(block *blockchain.Block) (bool, error) {
 	if (block.View <= r.lastVotedView) || (parentBlock.View < r.preferredView) {
 		return false, nil
 	}
+
 	return true, nil
 }
 
@@ -310,16 +322,17 @@ func (r *Raft) commitRule(qc *blockchain.QC) (bool, *blockchain.Block, error) {
 	if ((grandParentBlock.View + 1) == parentBlock.View) && ((parentBlock.View + 1) == qc.View) {
 		return true, grandParentBlock, nil
 	}
+
 	return false, nil, nil
 }
 
-func (r *Raft) updateLastVotedView(targetView types.View) error {
-	if targetView < r.lastVotedView {
-		return fmt.Errorf("target view is lower than the last voted view")
-	}
-	r.lastVotedView = targetView
-	return nil
-}
+// func (r *Raft) updateLastVotedView(targetView types.View) error {
+// 	if targetView < r.lastVotedView {
+// 		return errors.New("target view is lower than the last voted view")
+// 	}
+// 	r.lastVotedView = targetView
+// 	return nil
+// }
 
 func (r *Raft) updatePreferredView(qc *blockchain.QC) error {
 	if qc.View <= 2 {
@@ -336,5 +349,6 @@ func (r *Raft) updatePreferredView(qc *blockchain.QC) error {
 	if grandParentBlock.View > r.preferredView {
 		r.preferredView = grandParentBlock.View
 	}
+
 	return nil
 }
