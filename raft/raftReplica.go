@@ -528,10 +528,11 @@ func (r *Replica) Start() {
 				Success: true,
 				Entries: v.Entries,
 				// LastIndex: len(r.LogEntry) - 1, //현재 LogEntry의 마지막 index
-				Index: v.Index,
+				Index:    v.Index,
+				LeaderID: v.LeaderID,
 			}
 			//r.FindLeaderFor(r.CurrentTerm)
-			r.Send(identity.NodeID(v.LeaderID), msg)
+			r.Send(v.LeaderID, msg)
 
 			log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료 | LastIndex: %v", r.ID(), len(r.LogEntry)-1)
 
@@ -565,9 +566,10 @@ func (r *Replica) Start() {
 			// }
 
 			msg := message.CommitAppendEntries{
-				Term:    r.CurrentTerm,
-				Entries: v.Entries,
-				Index:   v.Index,
+				Term:     r.CurrentTerm,
+				Entries:  v.Entries,
+				Index:    v.Index,
+				LeaderID: v.LeaderID,
 			}
 			r.Broadcast(msg)
 			r.LogEntry = append(r.LogEntry, v.Entries)
@@ -608,7 +610,7 @@ func (r *Replica) Start() {
 			//leader가 commit
 			//client에 값 전달
 
-		case message.CommitAppendEntries:
+		case message.CommitAppendEntries: //follower
 			r.LogEntry = append(r.LogEntry, v.Entries)
 			log.Debugf("GlobalIndex: %v, r.LogEntry: %v", v.Index, len(r.LogEntry))
 
@@ -632,7 +634,33 @@ func (r *Replica) Start() {
 			//logEntriesStr += fmt.Sprintf("| ")
 			//log.Debugf(logEntriesStr)
 
+			msg := message.PerformanceMeasure{
+				Term:    r.CurrentTerm,
+				Entries: v.Entries,
+				// LastIndex: len(r.LogEntry) - 1, //현재 LogEntry의 마지막 index
+				Index: v.Index,
+			}
+			//r.FindLeaderFor(r.CurrentTerm)
+			r.Send(v.LeaderID, msg)
+
 			r.TransactionNum++
+
+		case message.PerformanceMeasure: //leader
+			r.LatencySum = 0
+			r.TpsSum = 0
+			for _, tx := range v.Entries.Command { //latency
+				r.LatencyNum = time.Since(tx.Timestamp)
+				r.LatencySum += r.LatencyNum
+				fmt.Printf("latency: %v \n", r.LatencyNum)
+			}
+			for _, tx := range v.Entries.Command { //tps
+				r.TpsNum = float64(tx.Txsn) / float64(time.Since(tx.Timestamp).Seconds())
+				r.TpsSum += r.TpsNum
+				fmt.Printf("tps: %v \n", r.TpsNum)
+			}
+			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
+			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
+			fmt.Printf("트랜잭션 수: %v \n\n", len(v.Entries.Command))
 
 		case message.RequestVote:
 			log.Debugf("[%v]가 ReqeustVote받음", r.ID())
@@ -689,13 +717,13 @@ func (r *Replica) Start() {
 			go r.startHeartbeatTimer()
 
 			//pipeline
-			for {
+			go func() {
 				// r.ProcessLog를 현재 인덱스로 호출
 				r.ProcessLog(GlobalIndex)
 
 				// 인덱스를 증가시키고, 슬라이스의 끝에 도달하면 다시 처음으로 순환
-				GlobalIndex = GlobalIndex + 1
-			}
+				GlobalIndex++
+			}()
 
 			// 클라이언트로 부터 받은 값으로 합의 시작
 			//r.RaftSafety.ProcessResponseVote(&v)

@@ -140,10 +140,19 @@ type ResponseAppendEntries struct {
 	Success bool // true it follower contained entry matching prevLogIndex and prevLogTerm
 	Entries Log  // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
 	// LastIndex int
-	Index int // globalIndex
+	Index    int // globalIndex
+	LeaderID identity.NodeID
 }
 
 type CommitAppendEntries struct {
+	//Arguments:
+	Term     types.View
+	Entries  Log // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
+	Index    int // globalIndex
+	LeaderID identity.NodeID
+}
+
+type PerformanceMeasure struct {
 	//Arguments:
 	Term    types.View
 	Entries Log // 저장할 log entries들의 배열, 하트비트 메세지의 경우 배열이 비어있음
