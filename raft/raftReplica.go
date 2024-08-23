@@ -133,6 +133,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(message.CommitAppendEntries{}, r.handleCommitAppendEntries)
 	r.Register(message.RequestVote{}, r.handleRequestVote)
 	r.Register(message.ResponseVote{}, r.handleResponseVote)
+	r.Register(message.PerformanceMeasure{}, r.handleResponseVote)
 
 	gob.Register(blockchain.Block{})
 	gob.Register(blockchain.Vote{})
@@ -143,22 +144,25 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	gob.Register(message.CommitAppendEntries{})
 	gob.Register(message.RequestVote{})
 	gob.Register(message.ResponseVote{})
+	gob.Register(message.PerformanceMeasure{})
 
-	// Is there a better way to reduce the number of parameters?
-	switch alg {
-	// case "Raft":
-	// 	r.RaftSafety = Raft.NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	// case "tchs":
-	// 	r.RaftSafety = tchs.NewTchs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	// case "streamlet":
-	// 	r.RaftSafety = streamlet.NewStreamlet(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	// case "lbft":
-	// 	r.RaftSafety = lbft.NewLbft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	// case "fastRaft":
-	// 	r.RaftSafety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	default:
-		r.RaftSafety = NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	}
+	// // Is there a better way to reduce the number of parameters?
+	// switch alg {
+	// // case "Raft":
+	// // 	r.RaftSafety = Raft.NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// // case "tchs":
+	// // 	r.RaftSafety = tchs.NewTchs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// // case "streamlet":
+	// // 	r.RaftSafety = streamlet.NewStreamlet(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// // case "lbft":
+	// // 	r.RaftSafety = lbft.NewLbft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// // case "fastRaft":
+	// // 	r.RaftSafety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// default:
+	// 	r.RaftSafety = NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// }
+	r.RaftSafety = NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+
 	return r
 }
 
@@ -218,7 +222,7 @@ func (r *Replica) handleQuery(m message.Query) {
 	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
 	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
 	latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
-	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s\n", time.Now().Sub(r.startTime).Seconds(), float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds())
+	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s\n", time.Since(r.startTime).Seconds(), float64(r.totalCommittedTx)/time.Since(r.tmpTime).Seconds())
 	r.totalCommittedTx = 0
 	r.tmpTime = time.Now()
 	status := fmt.Sprintf("Latency: %v\n%s", latency, r.thrus)
@@ -243,7 +247,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	if block.Proposer == r.ID() {
 		for _, txn := range block.Payload {
 			// only record the delay of transactions from the local memory pool
-			delay := time.Now().Sub(txn.Timestamp)
+			delay := time.Since(txn.Timestamp)
 			r.totalDelay += delay
 			r.latencyNo++
 		}
@@ -263,27 +267,27 @@ func (r *Replica) processForkedBlock(block *blockchain.Block) {
 	log.Infof("[%v] the block is forked, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
 }
 
-func (r *Replica) processNewView(newView types.View) {
-	log.Debugf("[%v] is processing new view: %v, leader is %v", r.ID(), newView, r.FindLeaderFor(newView))
-	if !r.IsLeader(r.ID(), newView) {
-		return
-	}
-	r.proposeBlock(newView)
-}
+// func (r *Replica) processNewView(newView types.View) {
+// 	log.Debugf("[%v] is processing new view: %v, leader is %v", r.ID(), newView, r.FindLeaderFor(newView))
+// 	if !r.IsLeader(r.ID(), newView) {
+// 		return
+// 	}
+// 	r.proposeBlock(newView)
+// }
 
-func (r *Replica) proposeBlock(view types.View) {
-	createStart := time.Now()
-	block := r.RaftSafety.MakeProposal(view, r.pd.GeneratePayload())
-	r.totalBlockSize += len(block.Payload)
-	r.proposedNo++
-	createEnd := time.Now()
-	createDuration := createEnd.Sub(createStart)
-	block.Timestamp = time.Now()
-	r.totalCreateDuration += createDuration
-	r.Node.Broadcast(block)
-	_ = r.RaftSafety.ProcessBlock(block)
-	r.voteStart = time.Now()
-}
+// func (r *Replica) proposeBlock(view types.View) {
+// 	createStart := time.Now()
+// 	block := r.RaftSafety.MakeProposal(view, r.pd.GeneratePayload())
+// 	r.totalBlockSize += len(block.Payload)
+// 	r.proposedNo++
+// 	createEnd := time.Now()
+// 	createDuration := createEnd.Sub(createStart)
+// 	block.Timestamp = time.Now()
+// 	r.totalCreateDuration += createDuration
+// 	r.Node.Broadcast(block)
+// 	_ = r.RaftSafety.ProcessBlock(block)
+// 	r.voteStart = time.Now()
+// }
 
 // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 func (r *Replica) ListenCommittedBlocks() {
@@ -426,7 +430,7 @@ func (r *Replica) hearbeatTMOtest() {
 	// }
 }
 
-var GlobalIndex int = 0
+var GlobalIndex = 1
 
 func (r *Replica) ProcessLog(index int) { //leader
 	//ThroughputStart := time.Now()
@@ -465,7 +469,6 @@ func (r *Replica) ProcessLog(index int) { //leader
 	r.Broadcast(msg)
 	// r.ProcessLog() //pipeline
 	log.Debugf("[%v] Leader Broadcast Real RequestAppendEntries", r.ID())
-
 }
 
 // Start starts event loop
