@@ -35,7 +35,7 @@ func (r *Rotation) IsLeader(id identity.NodeID, view types.View) bool {
 	h.Write([]byte(strconv.Itoa(int(view) + 1)))
 	bs := h.Sum(nil)
 	data := binary.BigEndian.Uint64(bs)
-	
+
 	return data%uint64(r.peerNo) == uint64(id.Node()-1)
 }
 

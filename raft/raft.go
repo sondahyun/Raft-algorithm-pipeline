@@ -33,7 +33,7 @@ type Raft struct {
 }
 
 // ProcessElectionLocalTmo implements RaftSafety.
-func (r *Raft) ProcessElectionLocalTmo(view types.View) {
+func (r *Raft) ProcessElectionLocalTmo(_ types.View) {
 	panic("unimplemented")
 }
 
@@ -48,6 +48,7 @@ func NewRaft(node node.Node, pm *pacemaker.Pacemaker, elec election.Election, co
 	r.highQC = &blockchain.QC{View: 0}
 	r.committedBlocks = committedBlocks
 	r.forkedBlocks = forkedBlocks
+
 	return r
 }
 
@@ -60,46 +61,58 @@ func (r *Raft) ProcessBlock(block *blockchain.Block) error {
 			log.Warningf("[%v] received a block with an invalid signature", r.ID())
 		}
 	}
+
 	if block.View > curView+1 {
 		//	buffer the block
 		r.bufferedBlocks[block.View-1] = block
 		log.Debugf("[%v] the block is buffered, id: %x", r.ID(), block.ID)
+
 		return nil
 	}
+
 	if block.QC != nil {
 		r.updateHighQC(block.QC)
 	} else {
 		return fmt.Errorf("the block should contain a QC")
 	}
+
 	// does not have to process the QC if the replica is the proposer
 	if block.Proposer != r.ID() {
 		r.processCertificate(block.QC)
 	}
+
 	curView = r.pm.GetCurView()
 	if block.View < curView {
 		log.Warningf("[%v] received a stale proposal from %v", r.ID(), block.Proposer)
+
 		return nil
 	}
+
 	if !r.Election.IsLeader(block.Proposer, block.View) {
 		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
 	}
+
 	r.bc.AddBlock(block)
 	// process buffered QC
 	qc, ok := r.bufferedQCs[block.ID]
+
 	if ok {
 		r.processCertificate(qc)
 		delete(r.bufferedQCs, block.ID)
 	}
 
 	shouldVote, err := r.votingRule(block)
+
 	if err != nil {
 		log.Errorf("[%v] cannot decide whether to vote the block, %w", r.ID(), err)
 		return err
 	}
+
 	if !shouldVote {
 		log.Debugf("[%v] is not going to vote for block, id: %x", r.ID(), block.ID)
 		return nil
 	}
+
 	vote := blockchain.MakeVote(block.View, r.ID(), block.ID)
 	// vote is sent to the next leader
 	voteAggregator := r.FindLeaderFor(block.View + 1)
@@ -115,6 +128,7 @@ func (r *Raft) ProcessBlock(block *blockchain.Block) error {
 		_ = r.ProcessBlock(b)
 		delete(r.bufferedBlocks, block.View)
 	}
+
 	return nil
 }
 
@@ -124,16 +138,19 @@ func (r *Raft) ProcessVote(vote *blockchain.Vote) {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
 		if err != nil {
 			log.Warningf("[%v] Error in verifying the signature in vote id: %x", r.ID(), vote.BlockID)
+
 			return
 		}
 		if !voteIsVerified {
 			log.Warningf("[%v] received a vote with invalid signature. vote id: %x", r.ID(), vote.BlockID)
+
 			return
 		}
 	}
 	isBuilt, qc := r.bc.AddVote(vote)
 	if !isBuilt {
 		log.Debugf("[%v] not sufficient votes to build a QC, block id: %x", r.ID(), vote.BlockID)
+		
 		return
 	}
 	qc.Leader = r.ID()

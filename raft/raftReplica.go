@@ -23,7 +23,7 @@ import (
 
 type Replica struct {
 	node.Node
-	RaftSafety
+	Safety
 	election.Election
 	config.Config
 
@@ -66,36 +66,36 @@ type Replica struct {
 	eventChan       chan interface{}
 
 	/* for monitoring node statistics */
-	thrus                string
-	lastViewTime         time.Time
-	startTime            time.Time
-	tmpTime              time.Time
-	voteStart            time.Time
-	totalCreateDuration  time.Duration
-	totalProcessDuration time.Duration
-	totalProposeDuration time.Duration
-	totalDelay           time.Duration
-	totalRoundTime       time.Duration
-	totalVoteTime        time.Duration
-	totalBlockSize       int
-	receivedNo           int
-	roundNo              int
-	voteNo               int //vote 수
-	totalCommittedTx     int
-	latencyNo            int
-	proposedNo           int
-	processedNo          int
-	committedNo          int
+	thrus string
+	// lastViewTime         time.Time
+	startTime time.Time
+	tmpTime   time.Time
+	// voteStart            time.Time
+	// totalCreateDuration  time.Duration
+	// totalProcessDuration time.Duration
+	// totalProposeDuration time.Duration
+	totalDelay time.Duration
+	// totalRoundTime   time.Duration
+	// totalVoteTime    time.Duration
+	// totalBlockSize   int
+	receivedNo int
+	// roundNo          int
+	// voteNo           int // vote 수
+	totalCommittedTx int
+	latencyNo        int
+	// proposedNo       int
+	// processedNo      int
+	committedNo int
 }
 
 // NewReplica creates a new replica instance
-func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
+func NewRaftReplica(id identity.NodeID, _ string, isByz bool) *Replica {
 	r := new(Replica)
 	r.Node = node.NewNode(id, isByz)
 	if isByz {
 		log.Infof("[%v] is Byzantine", r.ID())
 	}
-	r.Election = election.NewRaftElection() //static
+	r.Election = election.NewRaftElection() // static
 	r.isByz = isByz
 	r.pd = mempool.NewProducer()
 	r.pm = pacemaker.NewPacemaker(config.GetConfig().N())
@@ -107,7 +107,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(blockchain.Vote{}, r.HandleVote)
 	r.Register(pacemaker.TMO{}, r.HandleTmo)
 
-	//초기화
+	// 초기화
 	r.table = make(map[string]int)
 	r.checkVote = make(map[types.View]bool)
 	r.CurrentTerm = types.View(0)
@@ -115,8 +115,8 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.VoteNum = make(map[types.View]int)
 	r.TotalNum = config.GetConfig().N()
 	r.LogEntry = []message.Log{{}} // message.LogEntry 타입의 빈 인스턴스로 초기화, 첫 인덱스가 1이 되도록 첫 번째 원소를 빈 상태로 추가
-	r.CommitIndex = 0              //커밋되어 있는 가장 높은 log entry의 index
-	r.LastApplied = 0              //state machine에 적용된 가장 높은 log entry의 index
+	r.CommitIndex = 0              // 커밋되어 있는 가장 높은 log entry의 index
+	r.LastApplied = 0              // state machine에 적용된 가장 높은 log entry의 index
 	r.TransactionNum = 0
 	r.TpsSum = 0
 	r.TpsNum = 0
@@ -133,7 +133,7 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(message.CommitAppendEntries{}, r.handleCommitAppendEntries)
 	r.Register(message.RequestVote{}, r.handleRequestVote)
 	r.Register(message.ResponseVote{}, r.handleResponseVote)
-	r.Register(message.PerformanceMeasure{}, r.handleResponseVote)
+	r.Register(message.PerformanceMeasure{}, r.handlePerformanceMeasure)
 
 	gob.Register(blockchain.Block{})
 	gob.Register(blockchain.Vote{})
@@ -161,12 +161,12 @@ func NewRaftReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	// default:
 	// 	r.RaftSafety = NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	// }
-	r.RaftSafety = NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	r.Safety = NewRaft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 
 	return r
 }
 
-/* Message Handlers */ //메세지 핸들러
+/* Message Handlers */
 func (r *Replica) handleRequestAppendEntries(msg message.RequestAppendEntries) {
 	r.eventChan <- msg
 }
@@ -184,6 +184,10 @@ func (r *Replica) handleRequestVote(msg message.RequestVote) {
 }
 
 func (r *Replica) handleResponseVote(msg message.ResponseVote) {
+	r.eventChan <- msg
+}
+
+func (r *Replica) handlePerformanceMeasure(msg message.PerformanceMeasure) {
 	r.eventChan <- msg
 }
 
@@ -213,21 +217,21 @@ func (r *Replica) HandleTmo(tmo pacemaker.TMO) {
 
 // handleQuery replies a query with the statistics of the node
 func (r *Replica) handleQuery(m message.Query) {
-	//realAveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.processedNo)
-	//aveProcessTime := float64(r.totalProcessDuration.Milliseconds()) / float64(r.processedNo)
-	//aveVoteProcessTime := float64(r.totalVoteTime.Milliseconds()) / float64(r.roundNo)
-	//aveBlockSize := float64(r.totalBlockSize) / float64(r.proposedNo)
-	//requestRate := float64(r.pd.TotalReceivedTxNo()) / time.Now().Sub(r.startTime).Seconds()
-	//committedRate := float64(r.committedNo) / time.Now().Sub(r.startTime).Seconds()
-	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
-	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
+	// realAveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.processedNo)
+	// aveProcessTime := float64(r.totalProcessDuration.Milliseconds()) / float64(r.processedNo)
+	// aveVoteProcessTime := float64(r.totalVoteTime.Milliseconds()) / float64(r.roundNo)
+	// aveBlockSize := float64(r.totalBlockSize) / float64(r.proposedNo)
+	// requestRate := float64(r.pd.TotalReceivedTxNo()) / time.Now().Sub(r.startTime).Seconds()
+	// committedRate := float64(r.committedNo) / time.Now().Sub(r.startTime).Seconds()
+	// aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
+	// aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
 	latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
 	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s\n", time.Since(r.startTime).Seconds(), float64(r.totalCommittedTx)/time.Since(r.tmpTime).Seconds())
 	r.totalCommittedTx = 0
 	r.tmpTime = time.Now()
 	status := fmt.Sprintf("Latency: %v\n%s", latency, r.thrus)
-	//status := fmt.Sprintf("chain status is: %s\nCommitted rate is %v.\nAve. block size is %v.\nAve. trans. delay is %v ms.\nAve. creation time is %f ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nRequest rate is %f txs/s.\nAve. round time is %f ms.\nLatency is %f ms.\nThroughput is %f txs/s.\n", r.Safety.GetChainStatus(), committedRate, aveBlockSize, aveTransDelay, aveCreateDuration, aveProcessTime, aveVoteProcessTime, requestRate, aveRoundTime, latency, throughput)
-	//status := fmt.Sprintf("Ave. actual proposing time is %v ms.\nAve. proposing time is %v ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nAve. block size is %v.\nAve. round time is %v ms.\nLatency is %v ms.\n", realAveProposeTime, aveProposeTime, aveProcessTime, aveVoteProcessTime, aveBlockSize, aveRoundTime, latency)
+	// status := fmt.Sprintf("chain status is: %s\nCommitted rate is %v.\nAve. block size is %v.\nAve. trans. delay is %v ms.\nAve. creation time is %f ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nRequest rate is %f txs/s.\nAve. round time is %f ms.\nLatency is %f ms.\nThroughput is %f txs/s.\n", r.Safety.GetChainStatus(), committedRate, aveBlockSize, aveTransDelay, aveCreateDuration, aveProcessTime, aveVoteProcessTime, requestRate, aveRoundTime, latency, throughput)
+	// status := fmt.Sprintf("Ave. actual proposing time is %v ms.\nAve. proposing time is %v ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nAve. block size is %v.\nAve. round time is %v ms.\nLatency is %v ms.\n", realAveProposeTime, aveProposeTime, aveProcessTime, aveVoteProcessTime, aveBlockSize, aveRoundTime, latency)
 	m.Reply(message.QueryReply{Info: status})
 }
 
@@ -313,10 +317,10 @@ func (r *Replica) startSignal() {
 
 func (r *Replica) startElectionTimer() {
 	log.Debugf("[%v]start startElectionTimer", r.ID())
-	//seed (현재시간 기준)
+	// seed (현재시간 기준)
 	rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	//rand.Seed(time.Now().UnixNano())
+	// rand.Seed(time.Now().UnixNano())
 
 	// 0~99까지의 난수 생성
 	randomNumber := rand.Intn(100) + 100
@@ -333,8 +337,8 @@ func (r *Replica) startElectionTimer() {
 	msg := message.RequestVote{
 		Term:         r.CurrentTerm,
 		CandidateID:  r.Node.ID(),
-		LastLogIndex: r.CommitIndex,                  //candidate의 마지막 log entry의 index
-		LastLogTerm:  r.LogEntry[r.CommitIndex].Term, //candidate의 마지막 log entry의 term
+		LastLogIndex: r.CommitIndex,                  // candidate의 마지막 log entry의 index
+		LastLogTerm:  r.LogEntry[r.CommitIndex].Term, // candidate의 마지막 log entry의 term
 	}
 
 	// vote for self
@@ -383,8 +387,8 @@ func (r *Replica) startElectionTimer() {
 
 // startHeartbeatTimer listens new view and timeout events
 // heartbeat Timer
-func (r *Replica) startHeartbeatTimer() { //heartbeat timer돌다가 electiontimeout되면 heartbeat멈춤
-	//리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
+func (r *Replica) startHeartbeatTimer() { // heartbeat timer돌다가 electiontimeout되면 heartbeat멈춤
+	// 리더가 heartbeat timer맞춰서 appendentries message보냄 (broadcast)
 	log.Debugf("[%v] leader start heartbeatTimer", r.ID())
 	log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
 
@@ -432,8 +436,8 @@ func (r *Replica) hearbeatTMOtest() {
 
 var GlobalIndex = 1
 
-func (r *Replica) ProcessLog(index int) { //leader
-	//ThroughputStart := time.Now()
+func (r *Replica) ProcessLog(index int) { // leader
+	// ThroughputStart := time.Now()
 
 	batch := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
 
@@ -490,7 +494,7 @@ func (r *Replica) Start() {
 		// 	r.processNewView(v)
 		case pacemaker.TMO:
 			// r.RaftSafety.ProcessRemoteTmo(&v)
-		case message.RequestAppendEntries: //Follwer
+		case message.RequestAppendEntries: // Follwer
 			// heartbeat reset
 			// HeartBeat 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
 			log.Debugf("[%v] follower가 RequestAppendEntries 받음", r.ID())
@@ -513,7 +517,7 @@ func (r *Replica) Start() {
 				continue
 			}
 
-			//Add AppendEntries (Entries != empty)
+			// Add AppendEntries (Entries != empty)
 			for i := 0; i < len(v.Entries.Command); i++ {
 				r.table[v.Entries.Command[i].Key] = v.Entries.Command[i].Value
 
@@ -534,20 +538,20 @@ func (r *Replica) Start() {
 				Index:    v.Index,
 				LeaderID: v.LeaderID,
 			}
-			//r.FindLeaderFor(r.CurrentTerm)
+			// r.FindLeaderFor(r.CurrentTerm)
 			r.Send(v.LeaderID, msg)
 
 			log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료 | LastIndex: %v", r.ID(), len(r.LogEntry)-1)
 
 			log.Debugf("[%v] follower가 ResponseAppendEntries send | LastIndex: %v", r.ID(), len(r.LogEntry)-1)
 
-		case message.ResponseAppendEntries: //leader
+		case message.ResponseAppendEntries: // leader
 
 			r.SuccessNum[v.Index]++
 			if v.Success {
 				r.SuccessNum[v.Index]++
 			}
-			if r.SuccessNum[v.Index] <= r.TotalNum/2 { //정족수 만족
+			if r.SuccessNum[v.Index] <= r.TotalNum/2 { // 정족수 만족
 				continue
 			}
 			if r.SuccessBool[v.Index] {
@@ -597,12 +601,12 @@ func (r *Replica) Start() {
 			// 수정 필요
 			r.LatencySum = 0
 			r.TpsSum = 0
-			for _, tx := range v.Entries.Command { //latency
+			for _, tx := range v.Entries.Command { // latency
 				r.LatencyNum = time.Since(tx.Timestamp)
 				r.LatencySum += r.LatencyNum
 				fmt.Printf("latency: %v \n", r.LatencyNum)
 			}
-			for _, tx := range v.Entries.Command { //tps
+			for _, tx := range v.Entries.Command { // tps
 				r.TpsNum = float64(tx.Txsn) / float64(time.Since(tx.Timestamp).Seconds())
 				r.TpsSum += r.TpsNum
 				fmt.Printf("tps: %v \n", r.TpsNum)
@@ -610,10 +614,10 @@ func (r *Replica) Start() {
 			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
 			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
 			fmt.Printf("트랜잭션 수: %v \n\n", len(v.Entries.Command))
-			//leader가 commit
-			//client에 값 전달
+			// leader가 commit
+			// client에 값 전달
 
-		case message.CommitAppendEntries: //follower
+		case message.CommitAppendEntries: // follower
 			r.LogEntry = append(r.LogEntry, v.Entries)
 			log.Debugf("GlobalIndex: %v, r.LogEntry: %v", v.Index, len(r.LogEntry))
 
@@ -621,10 +625,10 @@ func (r *Replica) Start() {
 			log.Debugf("[%v]가 CommitAppendEntries 처리 완료", r.ID())
 			log.Debugf("[%v] follower가 LogReplication 완료", r.ID())
 
-			//log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
-			//log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
+			// log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
+			// log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
 			// 원하는 형태로 LogEntry 배열 출력
-			//logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] -> ", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
+			// logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] -> ", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
 			// for j, logEntry := range r.LogEntry {
 			// 	if j == 0 {
 			// 		continue
@@ -634,29 +638,29 @@ func (r *Replica) Start() {
 			// 	}
 			// 	logEntriesStr += " | "
 			// }
-			//logEntriesStr += fmt.Sprintf("| ")
-			//log.Debugf(logEntriesStr)
+			// logEntriesStr += fmt.Sprintf("| ")
+			// log.Debugf(logEntriesStr)
 
 			msg := message.PerformanceMeasure{
 				Term:    r.CurrentTerm,
 				Entries: v.Entries,
-				// LastIndex: len(r.LogEntry) - 1, //현재 LogEntry의 마지막 index
+				// LastIndex: len(r.LogEntry) - 1, // 현재 LogEntry의 마지막 index
 				Index: v.Index,
 			}
-			//r.FindLeaderFor(r.CurrentTerm)
+			// r.FindLeaderFor(r.CurrentTerm)
 			r.Send(v.LeaderID, msg)
 
 			r.TransactionNum++
 
-		case message.PerformanceMeasure: //leader
+		case message.PerformanceMeasure: // leader latency, tps 측정
 			r.LatencySum = 0
 			r.TpsSum = 0
-			for _, tx := range v.Entries.Command { //latency
+			for _, tx := range v.Entries.Command { // latency
 				r.LatencyNum = time.Since(tx.Timestamp)
 				r.LatencySum += r.LatencyNum
 				fmt.Printf("latency: %v \n", r.LatencyNum)
 			}
-			for _, tx := range v.Entries.Command { //tps
+			for _, tx := range v.Entries.Command { // tps
 				r.TpsNum = float64(tx.Txsn) / float64(time.Since(tx.Timestamp).Seconds())
 				r.TpsSum += r.TpsNum
 				fmt.Printf("tps: %v \n", r.TpsNum)
@@ -704,7 +708,7 @@ func (r *Replica) Start() {
 			// 	continue
 			// }
 			if r.VoteNum[v.Term] <= r.TotalNum/2 {
-				continue //quorum 만족X
+				continue // quorum 만족X
 			}
 			if r.SuccessVote[v.Term] { // 중복 방지
 				continue
@@ -719,7 +723,7 @@ func (r *Replica) Start() {
 
 			go r.startHeartbeatTimer()
 
-			//pipeline
+			// pipeline
 			go func() {
 				// r.ProcessLog를 현재 인덱스로 호출
 				r.ProcessLog(GlobalIndex)
@@ -729,7 +733,7 @@ func (r *Replica) Start() {
 			}()
 
 			// 클라이언트로 부터 받은 값으로 합의 시작
-			//r.RaftSafety.ProcessResponseVote(&v)
+			// r.RaftSafety.ProcessResponseVote(&v)
 		}
 	}
 }
