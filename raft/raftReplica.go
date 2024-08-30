@@ -439,7 +439,6 @@ func (r *Replica) hearbeatTMOtest() {
 
 var (
 	GlobalIndex = 1
-	mu          sync.Mutex
 )
 
 func (r *Replica) ProcessLog(index int) { // leader
@@ -450,13 +449,21 @@ func (r *Replica) ProcessLog(index int) { // leader
 	// 슬라이스의 첫 번째 트랜잭션을 가져옴
 	cmds := make([]*message.Command, 0)
 	// TransactionNum := len(txs)
-	for i := 0; i < len(batch); i++ {
-		tx := batch[i]
-		// log.Debugf("len(txs):[%v]", len(txs))
+	// for i := 0; i < len(batch); i++ {
+	// 	tx := batch[i]
+	// 	// log.Debugf("len(txs):[%v]", len(txs))
+	// 	cmds = append(cmds, &message.Command{
+	// 		Key:       tx.Key,
+	// 		Value:     tx.Value,
+	// 		Txsn:      len(batch), // batch의 length
+	// 		Timestamp: time.Now(),
+	// 	})
+	// }
+	for _, tx := range batch {
 		cmds = append(cmds, &message.Command{
 			Key:       tx.Key,
 			Value:     tx.Value,
-			Txsn:      len(batch), // batch의 length
+			Txsn:      len(batch),
 			Timestamp: time.Now(),
 		})
 	}
@@ -486,8 +493,8 @@ func (r *Replica) Start() {
 	go r.Run()
 	// wait for the start signal
 	<-r.start
-	log.Debugf("[%v] node start", r.ID())
-	log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
+	// log.Debugf("[%v] node start", r.ID())
+	// log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
 
 	go r.startElectionTimer()    // startElectionTimer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
@@ -682,6 +689,7 @@ func (r *Replica) Start() {
 			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
 			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
 			fmt.Printf("트랜잭션 수: %v \n\n", len(v.Entries.Command))
+			fmt.Printf("GlobalIndex: %v, r.LogEntry: %v\n", v.Index, len(r.LogEntry)-1)
 
 			// log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Entries.Command, v.Entries.Command.Value, len(r.LogEntry)-1)
 			// log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry) // 원하는 형태로 LogEntry 배열 출력
@@ -754,17 +762,28 @@ func (r *Replica) Start() {
 			go r.startHeartbeatTimer()
 
 			// pipeline
+			go r.startPipeline()
+			// go func() {
+			// 	// r.ProcessLog를 현재 인덱스로 호출
+			// 	r.ProcessLog(GlobalIndex)
 
-			go func() {
-				// r.ProcessLog를 현재 인덱스로 호출
-				r.ProcessLog(GlobalIndex)
-
-				// 인덱스를 증가시키고, 슬라이스의 끝에 도달하면 다시 처음으로 순환
-				GlobalIndex++
-			}()
+			// 	// 인덱스를 증가시키고, 슬라이스의 끝에 도달하면 다시 처음으로 순환
+			// 	GlobalIndex++
+			// }()
 
 			// 클라이언트로 부터 받은 값으로 합의 시작
 			// r.RaftSafety.ProcessResponseVote(&v)
 		}
+	}
+}
+func (r *Replica) startPipeline() {
+	for {
+		r.mu.Lock()
+		index := GlobalIndex
+		GlobalIndex++
+		r.mu.Unlock()
+
+		go r.ProcessLog(index)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
