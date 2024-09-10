@@ -717,17 +717,19 @@ func (r *Replica) Start() {
 			if v.Term < r.CurrentTerm {
 				continue
 			}
-			if v.Term > r.CurrentTerm {
-				r.CurrentTerm = v.Term
-			}
+
+			// if v.Term > r.CurrentTerm {
+			// 	r.CurrentTerm = v.Term
+			// }
 			// follower
+
 			r.electionTimer.Stop() // follower가 candidate가 되는 것을 막는 로직
 			log.Debugf("[%v] follower가 electionTimer Stop", r.ID())
 
 			// Request확인, vote to candidate
 			msg := message.ResponseVote{
 				Term:        r.CurrentTerm,
-				VoteGranted: true,
+				VoteGranted: true, // vote완료
 			}
 			r.Send(v.CandidateID, msg)
 			log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
@@ -739,19 +741,21 @@ func (r *Replica) Start() {
 			if v.Term > r.CurrentTerm {
 				r.CurrentTerm = v.Term
 			}
+
 			if v.VoteGranted {
 				r.VoteNum[v.Term]++
 			}
-			// if r.VoteNum[v.Term] < r.TotalNum { //quorum 만족X
-			// 	continue
-			// }
+
 			if r.VoteNum[v.Term] <= r.TotalNum/2 {
 				continue // quorum 만족X
 			}
+
 			if r.SuccessVote[v.Term] { // 중복 방지
 				continue
 			}
-			r.SuccessVote[v.Term] = true
+
+			r.SuccessVote[v.Term] = true // SuccessVote(정족수 만족) 
+
 			log.Debugf("[%v] Receive ResponseVote, 정족수 확인 완료", r.ID())
 			log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
 
@@ -763,27 +767,17 @@ func (r *Replica) Start() {
 
 			// pipeline
 			go r.startPipeline()
-			// go func() {
-			// 	// r.ProcessLog를 현재 인덱스로 호출
-			// 	r.ProcessLog(GlobalIndex)
-
-			// 	// 인덱스를 증가시키고, 슬라이스의 끝에 도달하면 다시 처음으로 순환
-			// 	GlobalIndex++
-			// }()
-
-			// 클라이언트로 부터 받은 값으로 합의 시작
-			// r.RaftSafety.ProcessResponseVote(&v)
 		}
 	}
 }
 func (r *Replica) startPipeline() {
 	for {
-		r.mu.Lock()
+		//r.mu.Lock()
 		index := GlobalIndex
 		GlobalIndex++
-		r.mu.Unlock()
+		//r.mu.Unlock()
 
 		go r.ProcessLog(index)
-		time.Sleep(50 * time.Millisecond)
+		//time.Sleep(50 * time.Millisecond)
 	}
 }
