@@ -707,7 +707,7 @@ func (r *Replica) Start() {
 			// logEntriesStr += fmt.Sprintf("| ")
 			log.Debugf(logEntriesStr)
 
-		case message.RequestVote:
+		case message.RequestVote: //FOLLOWER
 			log.Debugf("[%v]가 ReqeustVote받음", r.ID())
 
 			// leader, candidate pass
