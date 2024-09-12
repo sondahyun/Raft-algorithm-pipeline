@@ -1,17 +1,19 @@
 module github.com/gitferry/bamboo
 
-go 1.14
+go 1.19
 
 require (
-	github.com/ailidani/paxi v0.0.0-20200918165309-7127c003b391
-	github.com/ethereum/go-ethereum v1.9.16 // indirect
-	github.com/go-delve/delve v1.22.1 // indirect
-	github.com/kjzz/viper v1.3.7 // indirect
-	github.com/prometheus/common v0.10.0
-	github.com/spaolacci/murmur3 v1.1.0 // indirect
+	github.com/ethereum/go-ethereum v1.9.16
 	github.com/stretchr/testify v1.8.4
 	github.com/willf/bitset v1.1.11
-	github.com/willf/bloom v2.0.3+incompatible // indirect
 	go.uber.org/atomic v1.7.0
 	golang.org/x/crypto v0.14.0
+)
+
+require (
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

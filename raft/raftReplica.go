@@ -441,54 +441,54 @@ var (
 	GlobalIndex = 1
 )
 
-func (r *Replica) ProcessLog(index int) { // leader
-	// ThroughputStart := time.Now()
+// func (r *Replica) ProcessLog(index int) { // leader
+// 	// ThroughputStart := time.Now()
 
-	batch := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
+// 	batch := r.pd.GeneratePayload() // 트랜잭션 슬라이스를 생성
 
-	// 슬라이스의 첫 번째 트랜잭션을 가져옴
-	cmds := make([]*message.Command, 0)
+// 	// 슬라이스의 첫 번째 트랜잭션을 가져옴
+// 	cmds := make([]*message.Command, 0)
 
-	// TransactionNum := len(txs)
-	// for i := 0; i < len(batch); i++ {
-	// 	tx := batch[i]
-	// 	// log.Debugf("len(txs):[%v]", len(txs))
-	// 	cmds = append(cmds, &message.Command{
-	// 		Key:       tx.Key,
-	// 		Value:     tx.Value,
-	// 		Txsn:      len(batch), // batch의 length
-	// 		Timestamp: time.Now(),
-	// 	})
-	// }
+// 	// TransactionNum := len(txs)
+// 	// for i := 0; i < len(batch); i++ {
+// 	// 	tx := batch[i]
+// 	// 	// log.Debugf("len(txs):[%v]", len(txs))
+// 	// 	cmds = append(cmds, &message.Command{
+// 	// 		Key:       tx.Key,
+// 	// 		Value:     tx.Value,
+// 	// 		Txsn:      len(batch), // batch의 length
+// 	// 		Timestamp: time.Now(),
+// 	// 	})
+// 	// }
 
-	for _, tx := range batch {
-		cmds = append(cmds, &message.Command{
-			Key:       tx.Key,
-			Value:     tx.Value,
-			Txsn:      len(batch),
-			Timestamp: time.Now(),
-		})
-	}
+// 	for _, tx := range batch {
+// 		cmds = append(cmds, &message.Command{
+// 			Key:       tx.Key,
+// 			Value:     tx.Value,
+// 			Txsn:      len(batch),
+// 			Timestamp: time.Now(),
+// 		})
+// 	}
 
-	addLog := message.Log{
-		Command: cmds,
-		Term:    r.CurrentTerm,
-	}
+// 	addLog := message.Log{
+// 		Command: cmds,
+// 		Term:    r.CurrentTerm,
+// 	}
 
-	msg := message.RequestAppendEntries{
-		Term:         r.CurrentTerm,
-		LeaderID:     r.ID(),
-		PrevLogIndex: len(r.LogEntry) - 1,
-		// PrevLogTerm:  r.CurrentTerm - 1,
-		Entries:      addLog, // txn batch
-		Index:        index,
-		LeaderCommit: 0,
-	}
+// 	msg := message.RequestAppendEntries{
+// 		Term:         r.CurrentTerm,
+// 		LeaderID:     r.ID(),
+// 		PrevLogIndex: len(r.LogEntry) - 1,
+// 		// PrevLogTerm:  r.CurrentTerm - 1,
+// 		Entries:      addLog, // txn batch
+// 		Index:        index,
+// 		LeaderCommit: 0,
+// 	}
 
-	r.Broadcast(msg)
-	// r.ProcessLog() //pipeline
-	log.Debugf("GlobalIndex: %v, [%v] Leader Broadcast Real RequestAppendEntries", index, r.ID())
-}
+// 	r.Broadcast(msg)
+
+// 	log.Debugf("GlobalIndex: %v, [%v] Leader Broadcast Real RequestAppendEntries", index, r.ID())
+// }
 
 // Start starts event loop
 func (r *Replica) Start() {
@@ -497,7 +497,6 @@ func (r *Replica) Start() {
 	<-r.start
 	// log.Debugf("[%v] node start", r.ID())
 	// log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
-
 	go r.startElectionTimer()    // startElectionTimer
 	go r.ListenCommittedBlocks() // ListenCommittedBlocks listens committed blocks and forked blocks from the protocols
 
@@ -636,7 +635,7 @@ func (r *Replica) Start() {
 			}
 			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
 			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
-			fmt.Printf("GlobalIndex: %v, 트랜잭션 수: %v \n\n", v.Index len(v.Entries.Command))
+			fmt.Printf("GlobalIndex: %v, 트랜잭션 수: %v \n\n", v.Index, len(v.Entries.Command))
 			// leader가 commit
 			// client에 값 전달
 
@@ -688,8 +687,8 @@ func (r *Replica) Start() {
 				r.TpsSum += r.TpsNum
 				fmt.Printf("GlobalIndex: %v, tps: %v \n", v.Index, r.TpsNum)
 			}
-			fmt.Printf("latency average: %v \n", v.Index, r.LatencySum/time.Duration(len(v.Entries.Command)))
-			fmt.Printf("tps average: %v \n", v.Index, r.TpsSum/float64(len(v.Entries.Command)))
+			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
+			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
 			fmt.Printf("GlobalIndex: %v, 트랜잭션 수: %v \n\n", v.Index, len(v.Entries.Command))
 			fmt.Printf("GlobalIndex: %v, r.LogEntry: %v\n", v.Index, len(r.LogEntry)-1)
 
@@ -767,18 +766,26 @@ func (r *Replica) Start() {
 
 			go r.startHeartbeatTimer()
 
+			if GlobalIndex == 1 {
+				// r.ProcessLog(GlobalIndex)
+				GlobalIndex++
+			}
+			//r.ProcessLog(GlobalIndex)
 			// pipeline
-			go r.startPipeline()
+			//r.startPipeline()
 		}
 	}
 }
-func (r *Replica) startPipeline() {
-	for i := 0; i < 5; i++ {
-		// r.mu.Lock()
-		// r.mu.Unlock()
-		r.ProcessLog(GlobalIndex)
-		
-		time.Sleep(50 * time.Millisecond)
-		GlobalIndex++
-	}
-}
+
+// func (r *Replica) startPipeline() {
+// 	GlobalIndex = 1
+// 	r.ProcessLog(GlobalIndex)
+// 	// for i := 0; i < 5; i++ {
+// 	// 	// r.mu.Lock()
+// 	// 	// r.mu.Unlock()
+// 	// 	r.ProcessLog(GlobalIndex)
+
+// 	// 	time.Sleep(100 * time.Millisecond)
+// 	// 	GlobalIndex++
+// 	// }
+// }

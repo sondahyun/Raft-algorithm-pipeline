@@ -14,7 +14,7 @@
   "buffer_size": 10240,
   "multiversion": false,
   "timeout": 350,
-  "bsize": 10,
+  "bsize": 5,
   "memsize": 50,
   "fixed": false,
   "payload_size": 0,
