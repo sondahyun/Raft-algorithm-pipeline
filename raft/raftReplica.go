@@ -448,6 +448,7 @@ func (r *Replica) ProcessLog(index int) { // leader
 
 	// 슬라이스의 첫 번째 트랜잭션을 가져옴
 	cmds := make([]*message.Command, 0)
+
 	// TransactionNum := len(txs)
 	// for i := 0; i < len(batch); i++ {
 	// 	tx := batch[i]
@@ -459,6 +460,7 @@ func (r *Replica) ProcessLog(index int) { // leader
 	// 		Timestamp: time.Now(),
 	// 	})
 	// }
+
 	for _, tx := range batch {
 		cmds = append(cmds, &message.Command{
 			Key:       tx.Key,
@@ -485,7 +487,7 @@ func (r *Replica) ProcessLog(index int) { // leader
 
 	r.Broadcast(msg)
 	// r.ProcessLog() //pipeline
-	log.Debugf("[%v] Leader Broadcast Real RequestAppendEntries", r.ID())
+	log.Debugf("GlobalIndex: %v, [%v] Leader Broadcast Real RequestAppendEntries", index, r.ID())
 }
 
 // Start starts event loop
@@ -510,7 +512,7 @@ func (r *Replica) Start() {
 		case message.RequestAppendEntries: // Follwer
 			// heartbeat reset
 			// HeartBeat 없으면 생성과 동시에 hearbeatTMOtest 함수 실행
-			log.Debugf("[%v] follower가 RequestAppendEntries 받음", r.ID())
+			log.Debugf("GlobalIndex: %v, [%v] follower가 RequestAppendEntries 받음", v.Index, r.ID())
 
 			if r.heartbeat == nil {
 				log.Debugf("[%v] follower start heartbeatTimer", r.ID())
@@ -525,7 +527,7 @@ func (r *Replica) Start() {
 			r.heartbeat.Reset(time.Duration(randomNumber) * time.Millisecond)
 
 			if v.Entries.Command == nil {
-				log.Debugf("[%v] follower가 empty RequestAppendEntries 처리 완료", r.ID())
+				log.Debugf("GlobalIndex: %v, [%v] follower가 empty RequestAppendEntries 처리 완료", v.Index, r.ID())
 
 				continue
 			}
@@ -554,9 +556,9 @@ func (r *Replica) Start() {
 			// r.FindLeaderFor(r.CurrentTerm)
 			r.Send(v.LeaderID, msg)
 
-			log.Debugf("[%v] follower가 real RequestAppendEntries 처리 완료", r.ID())
+			log.Debugf("GlobalIndex: %v, [%v] follower가 real RequestAppendEntries 처리 완료", v.Index, r.ID())
 
-			log.Debugf("[%v] follower가 ResponseAppendEntries send ", r.ID())
+			log.Debugf("GlobalIndex: %v, [%v] follower가 ResponseAppendEntries send ", v.Index, r.ID())
 
 		case message.ResponseAppendEntries: // leader
 			// r.mu.Lock()
@@ -570,7 +572,7 @@ func (r *Replica) Start() {
 				continue
 			}
 			if r.SuccessBool[v.Index] {
-				log.Debugf("[%v] leader가 이미 append, broadcast 완료", r.ID())
+				log.Debugf("GlobalIndex: %v, [%v] leader가 이미 append, broadcast 완료", v.Index, r.ID())
 
 				continue
 			}
@@ -603,8 +605,8 @@ func (r *Replica) Start() {
 			r.LogEntry = append(r.LogEntry, v.Entries)
 
 			log.Debugf("GlobalIndex: %v, r.LogEntry: %v", v.Index, len(r.LogEntry)-1)
-			log.Debugf("[%v] leader가 LogRepli 정족수 확인 완료", r.ID())
-			log.Debugf("[%v] leader가 LogReplication 완료하고 CommitAppendEntreis broadcast", r.ID())
+			log.Debugf("GlobalIndex: %v, [%v] leader가 LogRepli 정족수 확인 완료", v.Index, r.ID())
+			log.Debugf("GlobalIndex: %v, [%v] leader가 LogReplication 완료하고 CommitAppendEntreis broadcast", v.Index, r.ID())
 
 			// logEntriesStr := fmt.Sprintf("[%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] ->", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
 			// for j, logEntry := range r.LogEntry {
@@ -634,7 +636,7 @@ func (r *Replica) Start() {
 			}
 			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
 			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
-			fmt.Printf("트랜잭션 수: %v \n\n", len(v.Entries.Command))
+			fmt.Printf("GlobalIndex: %v, 트랜잭션 수: %v \n\n", v.Index len(v.Entries.Command))
 			// leader가 commit
 			// client에 값 전달
 
@@ -643,8 +645,8 @@ func (r *Replica) Start() {
 			log.Debugf("GlobalIndex: %v, r.LogEntry: %v", v.Index, len(r.LogEntry)-1)
 
 			fmt.Println()
-			log.Debugf("[%v]가 CommitAppendEntries 처리 완료", r.ID())
-			log.Debugf("[%v] follower가 LogReplication 완료", r.ID())
+			log.Debugf("GlobalIndex: %v, [%v]가 CommitAppendEntries 처리 완료", v.Index, r.ID())
+			log.Debugf("GlobalIndex: %v, [%v] follower가 LogReplication 완료", v.Index, r.ID())
 
 			// log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Key, v.Value, len(r.LogEntry)-1)
 			// log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry)
@@ -679,33 +681,33 @@ func (r *Replica) Start() {
 			for _, tx := range v.Entries.Command { // latency
 				r.LatencyNum = time.Since(tx.Timestamp)
 				r.LatencySum += r.LatencyNum
-				fmt.Printf("latency: %v \n", r.LatencyNum)
+				fmt.Printf("GlobalIndex: %v, latency: %v \n", v.Index, r.LatencyNum)
 			}
 			for _, tx := range v.Entries.Command { // tps
 				r.TpsNum = float64(tx.Txsn) / float64(time.Since(tx.Timestamp).Seconds())
 				r.TpsSum += r.TpsNum
-				fmt.Printf("tps: %v \n", r.TpsNum)
+				fmt.Printf("GlobalIndex: %v, tps: %v \n", v.Index, r.TpsNum)
 			}
-			fmt.Printf("latency average: %v \n", r.LatencySum/time.Duration(len(v.Entries.Command)))
-			fmt.Printf("tps average: %v \n", r.TpsSum/float64(len(v.Entries.Command)))
-			fmt.Printf("트랜잭션 수: %v \n\n", len(v.Entries.Command))
+			fmt.Printf("latency average: %v \n", v.Index, r.LatencySum/time.Duration(len(v.Entries.Command)))
+			fmt.Printf("tps average: %v \n", v.Index, r.TpsSum/float64(len(v.Entries.Command)))
+			fmt.Printf("GlobalIndex: %v, 트랜잭션 수: %v \n\n", v.Index, len(v.Entries.Command))
 			fmt.Printf("GlobalIndex: %v, r.LogEntry: %v\n", v.Index, len(r.LogEntry)-1)
 
 			// log.Debugf("[%v] LogEntry: [%v] <- [%v], Index: [%+v]", r.ID(), v.Entries.Command, v.Entries.Command.Value, len(r.LogEntry)-1)
 			// log.Debugf("[%v] LogEntry All: %+v", r.ID(), r.LogEntry) // 원하는 형태로 LogEntry 배열 출력
 
-			logEntriesStr := fmt.Sprintf("Leader: [%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] -> ", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
-			for j, logEntry := range r.LogEntry {
-				if j == 0 {
-					continue
-				}
-				for i := 0; i < len(v.Entries.Command); i++ {
-					logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
-				}
-				logEntriesStr += " | "
-			}
-			// logEntriesStr += fmt.Sprintf("| ")
-			log.Debugf(logEntriesStr)
+			// logEntriesStr := fmt.Sprintf("Leader: [%v] v.Term: [%v], currentTerm: [%v], LogEntries[%d] -> ", r.ID(), v.Term, r.CurrentTerm, len(r.LogEntry)-1)
+			// for j, logEntry := range r.LogEntry {
+			// 	if j == 0 {
+			// 		continue
+			// 	}
+			// 	for i := 0; i < len(v.Entries.Command); i++ {
+			// 		logEntriesStr += fmt.Sprintf("[%s<=%d] ", logEntry.Command[i].Key, logEntry.Command[i].Value)
+			// 	}
+			// 	logEntriesStr += " | "
+			// }
+			// // logEntriesStr += fmt.Sprintf("| ")
+			// log.Debugf(logEntriesStr)
 
 		case message.RequestVote: //FOLLOWER
 			log.Debugf("[%v]가 ReqeustVote받음", r.ID())
@@ -754,7 +756,7 @@ func (r *Replica) Start() {
 				continue
 			}
 
-			r.SuccessVote[v.Term] = true // SuccessVote(정족수 만족) 
+			r.SuccessVote[v.Term] = true // SuccessVote(정족수 만족)
 
 			log.Debugf("[%v] Receive ResponseVote, 정족수 확인 완료", r.ID())
 			log.Debugf("[%v] CurrentTerm: [%v]", r.ID(), r.CurrentTerm)
@@ -771,13 +773,12 @@ func (r *Replica) Start() {
 	}
 }
 func (r *Replica) startPipeline() {
-	for {
-		//r.mu.Lock()
-		index := GlobalIndex
+	for i := 0; i < 5; i++ {
+		// r.mu.Lock()
+		// r.mu.Unlock()
+		r.ProcessLog(GlobalIndex)
+		
+		time.Sleep(50 * time.Millisecond)
 		GlobalIndex++
-		//r.mu.Unlock()
-
-		go r.ProcessLog(index)
-		//time.Sleep(50 * time.Millisecond)
 	}
 }
